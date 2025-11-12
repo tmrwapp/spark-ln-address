@@ -17,9 +17,9 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "NODE_ENV=test jest --config ./test/jest-e2e.json",
+    "test:e2e": "NODE_ENV=test DATABASE_URL=\"mysql://spark_user:spark_password@localhost:3309/spark_ln_address_test\" jest --config ./test/jest-e2e.json",
     "test:e2e:setup": "bash scripts/setup-test-db.sh",
-    "test:e2e:teardown": "docker-compose --profile test down -v",
+    "test:e2e:teardown": "docker-compose --profile test stop mysql-test && docker-compose --profile test rm -f mysql-test && docker volume rm spark-ln-address_mysql_test_data 2>/dev/null || true",
     "test:e2e:full": "npm run test:e2e:setup && npm run test:e2e && npm run test:e2e:teardown"
   },
   "dependencies": {

@@ -2,9 +2,6 @@
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": ".",
   "testEnvironment": "node",
-  "env": {
-    "DATABASE_URL": "mysql://spark_user:spark_password@localhost:3309/spark_ln_address_test"
-  },
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
