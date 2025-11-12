@@ -1,0 +1,62 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  lightningNames LightningName[]
+
+  @@map("users")
+}
+
+model LightningName {
+  id                  String  @id @default(cuid())
+  username            String  @unique
+  userId              String
+  linkingPubKeyHex    String  @unique // secp256k1 public key hex for LNURL-Auth
+  sparkPubKeyHex      String? // optional Lightspark node public key
+  active              Boolean @default(true)
+
+  // Relations
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@map("lightning_names")
+}
+
+model AuthNonce {
+  id           String   @id @default(cuid())
+  k1           String   @unique // 32-byte hex nonce for LNURL-Auth
+  expiresAt    DateTime
+  usedAt       DateTime?
+  metadataJson String? // optional JSON metadata from wallet
+
+  @@map("auth_nonces")
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  usernameId  String
+  amountMsat  BigInt   // amount in milli-satoshi
+  bolt11      String   // BOLT11 invoice string
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime // when invoice expires
+  status      String   @default("pending") // pending, paid, expired, cancelled
+
+  // Relations
+  lightningName LightningName @relation(fields: [usernameId], references: [id], onDelete: Cascade)
+
+  @@map("invoices")
+}
