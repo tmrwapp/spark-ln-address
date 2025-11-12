@@ -51,12 +51,32 @@ $ npm run start:prod
 # unit tests
 $ npm run test
 
-# e2e tests
+# e2e tests (requires test database to be set up)
 $ npm run test:e2e
+
+# setup test database (starts Docker container and runs migrations)
+$ npm run test:e2e:setup
+
+# teardown test database (stops and removes Docker container)
+$ npm run test:e2e:teardown
+
+# run full e2e test suite (setup, test, teardown)
+$ npm run test:e2e:full
 
 # test coverage
 $ npm run test:cov
 ```
+
+### E2E Test Database
+
+E2E tests use a separate MySQL database container to ensure isolation from the development database. The test database runs on port `3309` and uses the database name `spark_ln_address_test`.
+
+To run E2E tests:
+1. First, set up the test database: `npm run test:e2e:setup`
+2. Run the tests: `npm run test:e2e`
+3. Optionally tear down the test database: `npm run test:e2e:teardown`
+
+Or use the convenience command: `npm run test:e2e:full`
 
 ## Support
 

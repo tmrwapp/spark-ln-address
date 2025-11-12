@@ -5,7 +5,11 @@ import { ConfigModule as NestConfigModule } from '@nestjs/config'
   imports: [
     NestConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
+      envFilePath: [
+        process.env.NODE_ENV === 'test' ? '.env.test' : null,
+        '.env.local',
+        '.env',
+      ].filter(Boolean) as string[],
       validationOptions: {
         allowUnknown: false,
         abortEarly: true,
