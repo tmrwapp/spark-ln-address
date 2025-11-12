@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common'
+import { BadRequestException, Controller, Get, Query } from '@nestjs/common'
 import { AuthService } from './auth.service'
 import { LnurlAuthChallengeDto } from '../common/lnurl-auth-challenge.dto'
 
@@ -24,6 +24,22 @@ export class AuthController {
     @Query('key') key: string,
     @Query('username') username: string,
   ) {
+    if (!username) {
+      throw new BadRequestException({ status: 'ERROR', reason: 'Username is required' })
+    }
+
+    if (!k1) {
+      throw new BadRequestException({ status: 'ERROR', reason: 'k1 is required' })
+    }
+
+    if (!sig) {
+      throw new BadRequestException({ status: 'ERROR', reason: 'sig is required' })
+    }
+
+    if (!key) {
+      throw new BadRequestException({ status: 'ERROR', reason: 'linking key is required' })
+    }
+
     return this.authService.verifyAndBindUsername(k1, sig, key, username)
   }
 }
