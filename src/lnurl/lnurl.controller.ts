@@ -66,11 +66,18 @@ export class LnurlController {
       throw new NotFoundException('Username not found')
     }
 
+    // Validate Lightspark public key
+    if (!lightningName.sparkPubKeyHex) {
+      throw new BadRequestException('Lightspark public key not found')
+    }
+    const sparkPubKeyHex = lightningName.sparkPubKeyHex
+
+
     // Create invoice via Lightspark
     const domain = getDomainFromBaseUrl(this.configService.get<string>('PUBLIC_BASE_URL')!)
     const memo = comment ? `${lightningName.username}@${domain}: ${comment}` : `${lightningName.username}@${domain}`
 
-    const invoiceResult = await this.lightsparkService.createInvoice(amountMsat, memo)
+    const invoiceResult = await this.lightsparkService.createInvoice(sparkPubKeyHex, amountMsat, memo)
 
     // Persist invoice in database
     await this.lnurlService.createInvoice({
