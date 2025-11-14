@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { createHash, randomBytes } from 'crypto'
-import { verify } from '@noble/secp256k1'
 
 @Injectable()
 export class AuthService {
@@ -55,9 +54,8 @@ export class AuthService {
       throw new BadRequestException({ status: 'ERROR', reason: 'k1 expired' })
     }
 
-    // TODO: Verify secp256k1 signature
-    // For now, accept any signature (implement proper verification later)
-    if (!this.verifySignature(k1, sig, key)) {
+    // Verify secp256k1 signature
+    if (!(await this.verifySignature(k1, sig, key))) {
       throw new BadRequestException({ status: 'ERROR', reason: 'Invalid signature' })
     }
 
@@ -92,7 +90,7 @@ export class AuthService {
     return { status: 'OK' }
   }
 
-  private verifySignature(k1: string, sig: string, key: string): boolean {
+  private async verifySignature(k1: string, sig: string, key: string): Promise<boolean> {
     try {
       // Validate input formats
       if (!/^[0-9a-fA-F]{64}$/.test(k1)) {
@@ -118,6 +116,9 @@ export class AuthService {
 
       // Convert public key from hex to bytes
       const pubKeyBytes = Buffer.from(key, 'hex')
+
+      // Dynamically import the ESM module at runtime
+      const { verify } = await import('@noble/secp256k1')
 
       // Verify the signature using secp256k1
       // The signature is over the k1 bytes (32 bytes)
