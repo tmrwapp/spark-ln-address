@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { createHash, randomBytes } from 'crypto'
+import { verify } from '@noble/secp256k1'
 
 @Injectable()
 export class AuthService {
@@ -92,10 +93,40 @@ export class AuthService {
   }
 
   private verifySignature(k1: string, sig: string, key: string): boolean {
-    // TODO: Implement proper secp256k1 signature verification
-    // For LNURL-Auth, signature should be over the k1 bytes using the linking key
-    // This is a placeholder - real implementation needed
-    return sig.length === 128 && key.length === 66 // Rough validation for now
+    try {
+      // Validate input formats
+      if (!/^[0-9a-fA-F]{64}$/.test(k1)) {
+        return false // k1 must be 64 hex chars (32 bytes)
+      }
+
+      if (!/^[0-9a-fA-F]+$/.test(sig)) {
+        return false // sig must be hex
+      }
+
+      if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
+        return false // key must be 66 (compressed) or 130 (uncompressed) hex chars
+      }
+
+      // Convert k1 from hex to bytes (32 bytes)
+      const k1Bytes = Buffer.from(k1, 'hex')
+      if (k1Bytes.length !== 32) {
+        return false
+      }
+
+      // Convert signature from hex to bytes
+      const sigBytes = Buffer.from(sig, 'hex')
+
+      // Convert public key from hex to bytes
+      const pubKeyBytes = Buffer.from(key, 'hex')
+
+      // Verify the signature using secp256k1
+      // The signature is over the k1 bytes (32 bytes)
+      // @noble/secp256k1 can handle both DER and compact signature formats
+      return verify(sigBytes, k1Bytes, pubKeyBytes)
+    } catch (error) {
+      // If any error occurs during verification, the signature is invalid
+      return false
+    }
   }
 }
 
