@@ -10,17 +10,94 @@ NGINX must expose this path on your public domain and forward it to the NestJS a
 
 ---
 
-### 1. Prerequisites
+### 1. Running the application with PM2
+
+Before setting up NGINX, you need to have the NestJS application running. PM2 is recommended for production deployments as it provides process management, auto-restart, and logging.
+
+#### Prerequisites
+
+- Node.js and npm installed
+- PM2 installed globally: `npm install -g pm2`
+- Application dependencies installed: `npm install`
+- Database configured and accessible
+- Environment variables configured (see `env.example`)
+
+#### Deployment steps
+
+1. Build the application:
+
+   ```bash
+   npm run build
+   ```
+
+2. Create a `.env` file in the project root with your configuration:
+
+   ```bash
+   cp env.example .env
+   # Edit .env with your actual values
+   ```
+
+   Required variables:
+   - `DATABASE_URL` - MySQL connection string
+   - `PUBLIC_BASE_URL` - Your public domain (e.g. `https://example.com`)
+   - `LIGHTSPARK_CLIENT_ID` - Lightspark client ID
+   - `LIGHTSPARK_CLIENT_SECRET` - Lightspark client secret
+   - `LIGHTSPARK_NODE_ID` - Lightspark node ID
+   - `PORT` - Port to run on (default: 3003)
+
+3. Create logs directory (PM2 will write logs here):
+
+   ```bash
+   mkdir -p logs
+   ```
+
+4. Start the application with PM2:
+
+   ```bash
+   pm2 start ecosystem.config.cjs
+   ```
+
+5. Save PM2 process list to start on system reboot:
+
+   ```bash
+   pm2 save
+   pm2 startup
+   ```
+
+   The `pm2 startup` command will output a command to run with `sudo` that sets up PM2 to start on boot.
+
+6. Verify the application is running:
+
+   ```bash
+   pm2 status
+   pm2 logs spark-ln-address
+   ```
+
+7. The application should now be running on `http://127.0.0.1:3003` (or your configured `PORT`).
+
+#### Useful PM2 commands
+
+- `pm2 restart spark-ln-address` - Restart the application
+- `pm2 stop spark-ln-address` - Stop the application
+- `pm2 delete spark-ln-address` - Remove from PM2
+- `pm2 logs spark-ln-address` - View logs
+- `pm2 monit` - Monitor resources (CPU, memory)
+
+**Note:** Make sure the port in your NGINX configuration matches the `PORT` environment variable (default is 3003, not 3000).
+
+---
+
+### 2. Prerequisites for NGINX setup
 
 - A domain name, e.g. `example.com`
 - DNS A/AAAA record pointing `example.com` to your server
-- This NestJS app running, e.g. on `http://127.0.0.1:3000`
+- This NestJS app running via PM2 (see section 1), e.g. on `http://127.0.0.1:3003`
   - `PUBLIC_BASE_URL` **must** be set (e.g. `https://example.com`) so the controller can generate correct callbacks
 - NGINX installed on the server
 
 ---
 
-### 2. Basic NGINX HTTP reverse proxy (no TLS, for testing)
+### 3. Basic NGINX HTTP reverse proxy (no TLS, for testing)
 
 For local or internal testing you can start with a plain HTTP proxy:
 
@@ -39,7 +116,7 @@ For local or internal testing you can start with a plain HTTP proxy:
 
      # Forward LNURL pay metadata requests (LUD-16: /.well-known/lnurlp/<username>)
      location /.well-known/lnurlp/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -48,7 +125,7 @@ For local or internal testing you can start with a plain HTTP proxy:
 
      # Forward LNURL callback to NestJS app (`LnurlController.handleLnurlCallback`)
      location /lnurl/callback/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -72,7 +149,7 @@ For local or internal testing you can start with a plain HTTP proxy:
 With this in place, LNURL wallets will call:
 
 - `https://example.com/.well-known/lnurlp/<username>`  
-  which NGINX proxies to `http://127.0.0.1:3000/.well-known/lnurlp/<username>` and is handled by `LnurlController.getLnurlPayMetadata`.
+  which NGINX proxies to `http://127.0.0.1:3003/.well-known/lnurlp/<username>` and is handled by `LnurlController.getLnurlPayMetadata`.
 
 The controller then returns a `callback` URL like:
 
@@ -82,7 +159,7 @@ which is again received by NGINX and proxied to the Nest app.
 
 ---
 
-### 3. Recommended HTTPS setup with Let's Encrypt
+### 4. Recommended HTTPS setup with Let's Encrypt
 
 For production you **must** serve LNURL endpoints over HTTPS (as per [LUD‑16](https://github.com/lnurl/luds/blob/luds/16.md)).
 
@@ -103,7 +180,7 @@ Assuming you use Certbot with the NGINX plugin:
      server_name example.com;
 
      location /.well-known/lnurlp/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -111,7 +188,7 @@ Assuming you use Certbot with the NGINX plugin:
      }
 
      location /lnurl/callback/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -150,7 +227,7 @@ Assuming you use Certbot with the NGINX plugin:
 
      # LNURL pay metadata endpoint
      location /.well-known/lnurlp/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -159,7 +236,7 @@ Assuming you use Certbot with the NGINX plugin:
 
      # LNURL callback endpoint
      location /lnurl/callback/ {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -168,7 +245,7 @@ Assuming you use Certbot with the NGINX plugin:
 
      # (Optional) other app routes
      location / {
-       proxy_pass http://127.0.0.1:3000;
+       proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -201,7 +278,7 @@ Assuming you use Certbot with the NGINX plugin:
 
 ---
 
-### 4. How this maps to LUD‑16
+### 5. How this maps to LUD‑16
 
 Per [LUD‑16](https://github.com/lnurl/luds/blob/luds/16.md), a wallet resolving an internet identifier like:
 
