@@ -27,7 +27,7 @@ For local or internal testing you can start with a plain HTTP proxy:
 1. Create the NGINX configuration file in `sites-available`:
 
    ```bash
-   sudo nano /etc/nginx/sites-available/lnurl-proxy
+   sudo nano /etc/nginx/sites-available/example.com
    ```
 
 2. Add the following configuration (replace `example.com` with your domain):
@@ -60,7 +60,7 @@ For local or internal testing you can start with a plain HTTP proxy:
 3. Create a symlink to enable the site:
 
    ```bash
-   sudo ln -s /etc/nginx/sites-available/lnurl-proxy /etc/nginx/sites-enabled/
+   sudo ln -s /etc/nginx/sites-available/example.com /etc/nginx/sites-enabled/
    ```
 
 4. Test the configuration and reload NGINX:
@@ -92,7 +92,7 @@ Assuming you use Certbot with the NGINX plugin:
 2. If you haven't already, create a basic HTTP config file in `sites-available`:
 
    ```bash
-   sudo nano /etc/nginx/sites-available/lnurl-proxy
+   sudo nano /etc/nginx/sites-available/example.com
    ```
 
    Add a basic HTTP server block:
@@ -123,7 +123,7 @@ Assuming you use Certbot with the NGINX plugin:
 3. Create a symlink to enable the site:
 
    ```bash
-   sudo ln -s /etc/nginx/sites-available/lnurl-proxy /etc/nginx/sites-enabled/
+   sudo ln -s /etc/nginx/sites-available/example.com /etc/nginx/sites-enabled/
    ```
 
 4. Test and reload NGINX:
