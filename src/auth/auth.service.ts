@@ -78,6 +78,7 @@ export class AuthService {
         username,
         userId: user.id,
         linkingPubKeyHex: key,
+        sparkPubKeyHex: key,
       },
     })
 
