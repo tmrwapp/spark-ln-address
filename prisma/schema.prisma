@@ -50,7 +50,7 @@ model Invoice {
   id          String   @id @default(cuid())
   usernameId  String
   amountMsat  BigInt   // amount in milli-satoshi
-  bolt11      String   // BOLT11 invoice string
+  bolt11      String   @db.Text // BOLT11 invoice string
   createdAt   DateTime @default(now())
   expiresAt   DateTime // when invoice expires
   status      String   @default("pending") // pending, paid, expired, cancelled
