@@ -1,4 +1,4 @@
-import { Controller, Get, Param, NotFoundException, Query, BadRequestException } from '@nestjs/common'
+import { Controller, Get, Param, NotFoundException, Query, BadRequestException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { LnurlService } from './lnurl.service'
 import { LightsparkService } from '../lightspark/lightspark.service'
@@ -9,6 +9,7 @@ import { getDomainFromBaseUrl } from '../common/utils'
 
 @Controller()
 export class LnurlController {
+  private readonly logger = new Logger(LnurlController.name);
   constructor(
     private readonly lnurlService: LnurlService,
     private readonly lightsparkService: LightsparkService,
@@ -65,20 +66,22 @@ export class LnurlController {
     if (!lightningName) {
       throw new NotFoundException('Username not found')
     }
+    this.logger.log(`Found user with name: ${lightningName.username}`)
 
     // Validate Lightspark public key
     if (!lightningName.sparkPubKeyHex) {
       throw new BadRequestException('Lightspark public key not found')
     }
+    this.logger.log(`Lightspark public key: ${lightningName.sparkPubKeyHex}`)
     const sparkPubKeyHex = lightningName.sparkPubKeyHex
 
-
+    this.logger.log(`Creating invoice for amount: ${amountMsat} msat`)
     // Create invoice via Lightspark
     const domain = getDomainFromBaseUrl(this.configService.get<string>('PUBLIC_BASE_URL')!)
     const memo = comment ? `${lightningName.username}@${domain}: ${comment}` : `${lightningName.username}@${domain}`
-
+    this.logger.log(`Memo: ${memo}`)
     const invoiceResult = await this.lightsparkService.createInvoice(sparkPubKeyHex, amountMsat, memo)
-
+    this.logger.log(`Invoice created: ${invoiceResult.bolt11}`)
     // Persist invoice in database
     await this.lnurlService.createInvoice({
       usernameId: lightningName.id,
