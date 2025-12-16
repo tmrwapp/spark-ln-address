@@ -114,17 +114,8 @@ For local or internal testing you can start with a plain HTTP proxy:
      listen 80;
      server_name example.com;
 
-     # Forward LNURL pay metadata requests (LUD-16: /.well-known/lnurlp/<username>)
-     location /.well-known/lnurlp/ {
-       proxy_pass http://127.0.0.1:3003;
-       proxy_set_header Host $host;
-       proxy_set_header X-Real-IP $remote_addr;
-       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-       proxy_set_header X-Forwarded-Proto $scheme;
-     }
-
-     # Forward LNURL callback to NestJS app (`LnurlController.handleLnurlCallback`)
-     location /lnurl/callback/ {
+     # Forward all API calls to NestJS app
+     location / {
        proxy_pass http://127.0.0.1:3003;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;

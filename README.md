@@ -1,93 +1,76 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# Spark LN Address
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay (LUD-06/LUD-16) to generate BOLT11 invoices via Lightspark and LNURL-Auth (LUD-04) for self-serve username registration (`username@domain`). Built with NestJS, Prisma, and MySQL.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## What it does
+- Resolves `username@domain` Lightning Addresses to LNURL-Pay metadata.
+- Generates invoices through the Lightspark SDK and records them in MySQL.
+- Issues LNURL-Auth challenges and binds usernames to linking pubkeys.
+- Enforces username normalization/availability and fixed min/max sendable msats.
 
-## Description
+## Architecture (high level)
+- `lnurl`: serves pay metadata and callback to create invoices.
+- `auth`: LNURL-Auth challenge and callback to verify signatures and register usernames.
+- `lightspark`: wraps `@buildonspark/spark-sdk` to mint invoices.
+- `prisma`: MySQL models for users, lightning names, auth nonces, invoices.
+- `config`: env configuration; app boots on port `3003` by default.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Data model (Prisma)
+- `User`: base account.
+- `LightningName`: `username` (unique), `linkingPubKeyHex` (LNURL-Auth), optional `sparkPubKeyHex`, `active`.
+- `AuthNonce`: LNURL-Auth `k1` nonce with expiry/usage tracking.
+- `Invoice`: amount (msat), `bolt11`, `expiresAt`, status, linked to `LightningName`.
 
-## Installation
+## API
 
-```bash
-$ npm install
-```
+### LNURL-Pay (LUD-16)
+- `GET /.well-known/lnurlp/:username`
+  - Validates username exists/active.
+  - Returns `tag: "payRequest"`, `callback`, `minSendable`, `maxSendable`, `metadata` (`text/plain` with `username@domain`), `commentAllowed`.
+- `GET /lnurl/callback/:username?amount=<msat>&comment=<text>`
+  - Validates amount within configured min/max.
+  - Requires `sparkPubKeyHex` on the Lightning Name.
+  - Creates invoice via Lightspark and returns `{ pr, routes: [] }`.
 
-## Running the app
+### LNURL-Auth (LUD-04)
+- `GET /v1/auth/lnurl`
+  - Returns `{ tag: 'login', k1, callback }` with 5-minute expiry stored in DB.
+- `GET /v1/auth/lnurl/callback?k1=...&sig=...&key=...&username=...`
+  - Verifies signature over `k1` with provided pubkey.
+  - Normalizes/validates username, checks availability, stores Lightning Name, and marks nonce as used.
 
-```bash
-# development
-$ npm run start
+## Configuration
+Copy `env.example` to `.env` and adjust as needed.
 
-# watch mode
-$ npm run start:dev
+Required:
+- `DATABASE_URL` — MySQL connection (dev compose maps `3308->3306`).
+- `PUBLIC_BASE_URL` — public URL used to build LNURL callbacks/metadata.
 
-# production mode
-$ npm run start:prod
-```
+Optional:
+- `PORT` (default 3003)
+- `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
 
-## Test
+## Run locally
+1) Install deps: `npm install`
+2) Start MySQL (dev): `docker-compose up -d mysql` (uses port 3308)
+3) Set env: `cp env.example .env` and fill values
+4) Generate Prisma client (after DB is reachable): `npx prisma generate`
+5) Start API: `npm run start:dev`
 
-```bash
-# unit tests
-$ npm run test
+Production build: `npm run build` then `npm run start:prod`.
 
-# e2e tests (requires test database to be set up)
-$ npm run test:e2e
+## Database & migrations
+This service uses Prisma with MySQL. If you update the schema, run your own Prisma migrations (`npx prisma migrate dev` or `npx prisma migrate deploy`) against the appropriate database. Do not run migrations in environments you don't control without confirmation.
 
-# setup test database (starts Docker container and runs migrations)
-$ npm run test:e2e:setup
+## Testing
+- Unit tests: `npm run test`
+- E2E tests (requires test DB on port 3309): `npm run test:e2e`
+- E2E setup/teardown helpers: `npm run test:e2e:setup`, `npm run test:e2e:teardown`, or `npm run test:e2e:full`
+- Coverage: `npm run test:cov`
 
-# teardown test database (stops and removes Docker container)
-$ npm run test:e2e:teardown
+E2E tests use a separate MySQL container (`mysql-test` profile) and database `spark_ln_address_test`.
 
-# run full e2e test suite (setup, test, teardown)
-$ npm run test:e2e:full
-
-# test coverage
-$ npm run test:cov
-```
-
-### E2E Test Database
-
-E2E tests use a separate MySQL database container to ensure isolation from the development database. The test database runs on port `3309` and uses the database name `spark_ln_address_test`.
-
-To run E2E tests:
-1. First, set up the test database: `npm run test:e2e:setup`
-2. Run the tests: `npm run test:e2e`
-3. Optionally tear down the test database: `npm run test:e2e:teardown`
-
-Or use the convenience command: `npm run test:e2e:full`
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](LICENSE).
+## Notes
+- Lightning Addresses resolve to `username@<PUBLIC_BASE_URL domain>`.
+- Min/max sendable amounts and comment allowance are fixed in `src/common/constants.ts`.
+- Spark SDK must be able to initialize at startup; ensure credentials are valid.
