@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common'
+import { Injectable, BadRequestException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'crypto'
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -95,20 +96,24 @@ export class AuthService {
     try {
       // Validate input formats
       if (!/^[0-9a-fA-F]{64}$/.test(k1)) {
+        this.logger.error(`Invalid k1: ${k1}`)
         return false // k1 must be 64 hex chars (32 bytes)
       }
 
       if (!/^[0-9a-fA-F]+$/.test(sig)) {
+        this.logger.error(`Invalid sig: ${sig}`)
         return false // sig must be hex
       }
 
       if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
+        this.logger.error(`Invalid key: ${key}`)
         return false // key must be 66 (compressed) or 130 (uncompressed) hex chars
       }
 
       // Convert k1 from hex to bytes (32 bytes)
       const k1Bytes = Buffer.from(k1, 'hex')
       if (k1Bytes.length !== 32) {
+        this.logger.error(`Invalid k1 bytes: ${k1Bytes.length}`)
         return false
       }
 
@@ -127,6 +132,10 @@ export class AuthService {
       return verify(sigBytes, k1Bytes, pubKeyBytes)
     } catch (error) {
       // If any error occurs during verification, the signature is invalid
+      this.logger.error(`Error verifying signature: ${error}`)
+      this.logger.error(`k1: ${k1}`)
+      this.logger.error(`sig: ${sig}`)
+      this.logger.error(`key: ${key}`)
       return false
     }
   }
