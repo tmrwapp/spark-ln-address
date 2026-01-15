@@ -17,9 +17,6 @@ module.exports = {
       // Max memory before restart (optional safety measure)
       max_memory_restart: '500M',
       // Logging configuration
-      error_file: './logs/pm2-error.log',
-      out_file: './logs/pm2-out.log',
-      log_file: './logs/pm2-combined.log',
       time: true,
       // Merge logs from all instances
       merge_logs: true,
