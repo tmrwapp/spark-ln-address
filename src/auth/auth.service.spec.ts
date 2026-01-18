@@ -135,7 +135,7 @@ describe('AuthService', () => {
 
       // Generate a valid signature
       const k1Bytes = Buffer.from(validK1, 'hex')
-      validSignature = Buffer.from(await sign(k1Bytes, validPrivateKey)).toString('hex')
+      validSignature = Buffer.from(sign(k1Bytes, validPrivateKey)).toString('hex')
 
       validUsername = 'testuser'
     })
@@ -193,12 +193,108 @@ describe('AuthService', () => {
           username: validUsername,
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
+          sparkPubKeyHex: validPublicKey,
         },
       })
       expect(mockPrismaService.authNonce.update).toHaveBeenCalledWith({
         where: { k1: validK1 },
         data: { usedAt: expect.any(Date) },
       })
+    })
+
+    it('should successfully verify using UTF-8 k1 encoding', async () => {
+      // Generate signature over UTF-8 bytes of k1
+      const k1Utf8Bytes = Buffer.from(validK1, 'utf8')
+      const utf8Signature = Buffer.from(sign(k1Utf8Bytes, validPrivateKey)).toString('hex')
+
+      const mockNonce = {
+        id: 'nonce-1',
+        k1: validK1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      }
+
+      const mockUser = {
+        id: 'user-1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
+      mockPrismaService.user.create.mockResolvedValue(mockUser)
+      mockPrismaService.lightningName.create.mockResolvedValue({
+        id: 'ln-1',
+        username: validUsername,
+        userId: mockUser.id,
+        linkingPubKeyHex: validPublicKey,
+        sparkPubKeyHex: null,
+        active: true,
+      })
+      mockPrismaService.authNonce.update.mockResolvedValue({
+        ...mockNonce,
+        usedAt: new Date(),
+      })
+
+      const result = await service.verifyAndBindUsername(
+        validK1,
+        utf8Signature,
+        validPublicKey,
+        validUsername,
+      )
+
+      expect(result).toEqual({ status: 'OK' })
+    })
+
+    it('should verify Set 1 provided by user (DER signature)', async () => {
+      const set1 = {
+        k1: '5c0fbb5d2a727fa0bcbe6dd94f282b30734b8592717fb461bec9ec9a029ea79a',
+        key: '03ca98c2b03f582e8f0149b31faa95ae222384d91021ea88cb4a0f0deef29ee1a9',
+        sig: '3044022040da008a0be7719fa169336ea9060f9f88276fc45c1e9521e91625ea7004142a0220432ac9741b1a061761d986584271570c09d98edec06cdd79c5be56b9cd3ae9f0',
+      }
+
+      const mockNonce = {
+        id: 'nonce-set1',
+        k1: set1.k1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      }
+
+      mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
+      mockPrismaService.user.create.mockResolvedValue({ id: 'user-set1' })
+      mockPrismaService.lightningName.create.mockResolvedValue({})
+      mockPrismaService.authNonce.update.mockResolvedValue({})
+
+      const result = await service.verifyAndBindUsername(set1.k1, set1.sig, set1.key, 'user1')
+      expect(result).toEqual({ status: 'OK' })
+    })
+
+    it('should verify Set 2 provided by user (Compact signature)', async () => {
+      const set2 = {
+        k1: 'f037091d7fe29ac3f173b072efde300c27a8e100c189262d57e2f583dc23179b',
+        key: '03ca98c2b03f582e8f0149b31faa95ae222384d91021ea88cb4a0f0deef29ee1a9',
+        sig: 'a9e86789e6f955d2babcd06e9b5dfc598c4eb96c3aa0b9eac8887c0d7de3b67d29a35fb4b4ee4cc834e893850c044a4ed31cd37439bdd547182759f556719fd4',
+      }
+
+      const mockNonce = {
+        id: 'nonce-set2',
+        k1: set2.k1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      }
+
+      mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
+      mockPrismaService.user.create.mockResolvedValue({ id: 'user-set2' })
+      mockPrismaService.lightningName.create.mockResolvedValue({})
+      mockPrismaService.authNonce.update.mockResolvedValue({})
+
+      const result = await service.verifyAndBindUsername(set2.k1, set2.sig, set2.key, 'user2')
+      expect(result).toEqual({ status: 'OK' })
     })
 
     it('should normalize username to lowercase', async () => {
@@ -242,6 +338,7 @@ describe('AuthService', () => {
           username: 'testuser',
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
+          sparkPubKeyHex: validPublicKey,
         },
       })
     })

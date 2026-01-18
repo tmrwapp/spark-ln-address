@@ -126,10 +126,30 @@ export class AuthService {
       // Dynamically import the ESM module at runtime
       const { verify } = await import('@noble/secp256k1')
 
+      // Normalize signature: convert from DER if needed
+      let finalSigBytes: Uint8Array = sigBytes
+      if (sigBytes.length > 64 && sigBytes[0] === 0x30) {
+        finalSigBytes = this.derToCompact(sigBytes)
+      }
+
       // Verify the signature using secp256k1
-      // The signature is over the k1 bytes (32 bytes)
-      // @noble/secp256k1 can handle both DER and compact signature formats
-      return verify(sigBytes, k1Bytes, pubKeyBytes)
+      // We try two paths for the message encoding:
+      // 1. Raw bytes from hex k1 (standard LNURL)
+      // 2. UTF-8 bytes of the k1 string (sometimes used by Spark signMessageWithIdentityKey)
+      const isRawVerify = verify(finalSigBytes, k1Bytes, pubKeyBytes)
+      if (isRawVerify) {
+        return true
+      }
+
+      const k1Utf8Bytes = Buffer.from(k1, 'utf8')
+      const isUtf8Verify = verify(finalSigBytes, k1Utf8Bytes, pubKeyBytes)
+
+      if (isUtf8Verify) {
+        this.logger.log(`Signature verified using UTF-8 k1 encoding for key: ${key}`)
+        return true
+      }
+
+      return false
     } catch (error) {
       // If any error occurs during verification, the signature is invalid
       this.logger.error(`Error verifying signature: ${error}`)
@@ -137,6 +157,42 @@ export class AuthService {
       this.logger.error(`sig: ${sig}`)
       this.logger.error(`key: ${key}`)
       return false
+    }
+  }
+
+  /**
+   * Converts a DER-encoded signature to compact (64-byte) format.
+   * Based on standard DER decoding for ECDSA.
+   */
+  private derToCompact(sigBytes: Buffer): Uint8Array {
+    try {
+      let offset = 2 // Skip 0x30 and length
+
+      // Read R
+      if (sigBytes[offset++] !== 0x02) return sigBytes
+      let rLen = sigBytes[offset++]
+      let r = sigBytes.subarray(offset, offset + rLen)
+      offset += rLen
+
+      // Read S
+      if (sigBytes[offset++] !== 0x02) return sigBytes
+      let sLen = sigBytes[offset++]
+      let s = sigBytes.subarray(offset, offset + sLen)
+
+      const normalize = (buf: Uint8Array) => {
+        if (buf.length > 32) return buf.slice(buf.length - 32)
+        if (buf.length < 32) {
+          const res = new Uint8Array(32)
+          res.set(buf, 32 - buf.length)
+          return res
+        }
+        return buf
+      }
+
+      return Buffer.concat([normalize(r), normalize(s)])
+    } catch (e) {
+      this.logger.error(`Error converting DER to compact: ${e.message}`)
+      return sigBytes
     }
   }
 }
