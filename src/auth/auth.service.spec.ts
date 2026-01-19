@@ -160,7 +160,6 @@ describe('AuthService', () => {
         username: validUsername,
         userId: mockUser.id,
         linkingPubKeyHex: validPublicKey,
-        sparkPubKeyHex: null,
         active: true,
       }
 
@@ -193,7 +192,6 @@ describe('AuthService', () => {
           username: validUsername,
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
-          sparkPubKeyHex: validPublicKey,
         },
       })
       expect(mockPrismaService.authNonce.update).toHaveBeenCalledWith({
@@ -229,7 +227,6 @@ describe('AuthService', () => {
         username: validUsername,
         userId: mockUser.id,
         linkingPubKeyHex: validPublicKey,
-        sparkPubKeyHex: null,
         active: true,
       })
       mockPrismaService.authNonce.update.mockResolvedValue({
@@ -320,7 +317,6 @@ describe('AuthService', () => {
         username: 'testuser',
         userId: mockUser.id,
         linkingPubKeyHex: validPublicKey,
-        sparkPubKeyHex: null,
         active: true,
       })
       mockPrismaService.authNonce.update.mockResolvedValue({
@@ -338,7 +334,6 @@ describe('AuthService', () => {
           username: 'testuser',
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
-          sparkPubKeyHex: validPublicKey,
         },
       })
     })
@@ -439,7 +434,6 @@ describe('AuthService', () => {
         username: validUsername,
         userId: 'user-existing',
         linkingPubKeyHex: 'existing-key',
-        sparkPubKeyHex: null,
         active: true,
       }
 
@@ -486,7 +480,6 @@ describe('AuthService', () => {
         username: validUsername,
         userId: mockUser.id,
         linkingPubKeyHex: publicKeyUncompressed,
-        sparkPubKeyHex: null,
         active: true,
       })
       mockPrismaService.authNonce.update.mockResolvedValue({

@@ -69,11 +69,11 @@ export class LnurlController {
     this.logger.log(`Found user with name: ${lightningName.username}`)
 
     // Validate Lightspark public key
-    if (!lightningName.sparkPubKeyHex) {
+    if (!lightningName.linkingPubKeyHex) {
       throw new BadRequestException('Lightspark public key not found')
     }
-    this.logger.log(`Lightspark public key: ${lightningName.sparkPubKeyHex}`)
-    const sparkPubKeyHex = lightningName.sparkPubKeyHex
+    this.logger.log(`Lightspark public key: ${lightningName.linkingPubKeyHex}`)
+    const sparkPubKeyHex = lightningName.linkingPubKeyHex
 
     this.logger.log(`Creating invoice for amount: ${amountMsat} msat`)
     // Create invoice via Lightspark

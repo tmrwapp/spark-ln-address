@@ -26,7 +26,6 @@ model LightningName {
   username            String  @unique
   userId              String
   linkingPubKeyHex    String  @unique // secp256k1 public key hex for LNURL-Auth
-  sparkPubKeyHex      String? // optional Lightspark node public key
   active              Boolean @default(true)
 
   // Relations

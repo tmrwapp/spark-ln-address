@@ -17,11 +17,17 @@ Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay 
 
 ## Data model (Prisma)
 - `User`: base account.
-- `LightningName`: `username` (unique), `linkingPubKeyHex` (LNURL-Auth), optional `sparkPubKeyHex`, `active`.
+- `LightningName`: `username` (unique), `linkingPubKeyHex` (LNURL-Auth), `active`.
 - `AuthNonce`: LNURL-Auth `k1` nonce with expiry/usage tracking.
 - `Invoice`: amount (msat), `bolt11`, `expiresAt`, status, linked to `LightningName`.
 
 ## API
+
+### Query (V1)
+- `GET /v1/query/username/:pubKey`
+  - Returns `{ username, lightningAddress, sparkAddress, publicKey }` for an active linking pubkey.
+- `GET /v1/query/pubkey/:username`
+  - Returns `{ username, lightningAddress, sparkAddress, publicKey }` for an active username.
 
 ### LNURL-Pay (LUD-16)
 - `GET /.well-known/lnurlp/:username`
@@ -29,7 +35,6 @@ Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay 
   - Returns `tag: "payRequest"`, `callback`, `minSendable`, `maxSendable`, `metadata` (`text/plain` with `username@domain`), `commentAllowed`.
 - `GET /lnurl/callback/:username?amount=<msat>&comment=<text>`
   - Validates amount within configured min/max.
-  - Requires `sparkPubKeyHex` on the Lightning Name.
   - Creates invoice via Lightspark and returns `{ pr, routes: [] }`.
 
 ### LNURL-Auth (LUD-04)

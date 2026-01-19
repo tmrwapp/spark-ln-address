@@ -39,11 +39,16 @@ describe('LnurlService', () => {
         username: 'alice',
         userId: '1',
         linkingPubKeyHex: 'mock-key',
-        sparkPubKeyHex: 'mock-key',
         active: true,
       }
 
-      jest.spyOn(prismaService.lightningName, 'findFirst').mockResolvedValue(mockLightningName)
+      jest.spyOn(prismaService.lightningName, 'findFirst').mockResolvedValue({
+        id: '1',
+        username: 'alice',
+        userId: '1',
+        linkingPubKeyHex: 'mock-key',
+        active: true,
+      } as any)
 
       const result = await service.findActiveLightningName('Alice')
 
