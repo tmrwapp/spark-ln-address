@@ -123,7 +123,14 @@ export class AuthService {
       const pubKeyBytes = Buffer.from(key, 'hex')
 
       // Dynamically import the ESM module at runtime
-      const { verify } = await import('@noble/secp256k1')
+      const { verify, hashes } = await import('@noble/secp256k1')
+
+      // Set up SHA-256 hash function for @noble/secp256k1 (required for verify)
+      if (!hashes.sha256) {
+        hashes.sha256 = (m: Uint8Array) => {
+          return createHash('sha256').update(m).digest()
+        }
+      }
 
       // Normalize signature: convert from DER if needed
       let finalSigBytes: Uint8Array = sigBytes
