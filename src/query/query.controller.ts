@@ -64,10 +64,11 @@ export class QueryController {
   @Get('pubkey/:username')
   async queryByUsername(
     @Param('username') username: string,
-  ): Promise<PubKeyQueryResponseDto> {
-    const lightningName = await this.queryService.findLightningNameByUsername(username)
-    if (!lightningName) {
-      throw new NotFoundException('Username not found or inactive')
+  ): Promise<PubKeyQueryResponseDto[]> {
+    this.logger.log(`Querying by username: ${username}`)
+    const lightningNames = await this.queryService.findLightningNameByUsername(username)
+    if (!lightningNames.length) {
+      return []
     }
 
     const publicBaseUrl = this.configService.get<string>('PUBLIC_BASE_URL')
@@ -76,22 +77,28 @@ export class QueryController {
     }
 
     const domain = getDomainFromBaseUrl(publicBaseUrl)
-    const lightningAddress = `${lightningName.username}@${domain}`
-    
-    const network = (this.configService.get<string>('SPARK_NETWORK') || 'MAINNET') as SparkNetwork
-    
-    let sparkAddress = ''
-    try {
-      sparkAddress = await encodeSparkAddress(lightningName.linkingPubKeyHex, network)
-    } catch (error) {
-      this.logger.error(`Error encoding spark address: ${error.message}`)
-    }
 
-    return {
-      username: lightningName.username,
-      lightningAddress,
-      sparkAddress,
-      publicKey: lightningName.linkingPubKeyHex,
-    }
+    const network = (this.configService.get<string>('SPARK_NETWORK') || 'MAINNET') as SparkNetwork
+
+    const results = await Promise.all(
+      lightningNames.map(async (lightningName) => {
+        const lightningAddress = `${lightningName.username}@${domain}`
+        let sparkAddress = ''
+        try {
+          sparkAddress = await encodeSparkAddress(lightningName.linkingPubKeyHex, network)
+        } catch (error) {
+          this.logger.error(`Error encoding spark address: ${error.message}`)
+        }
+
+        return {
+          username: lightningName.username,
+          lightningAddress,
+          sparkAddress,
+          publicKey: lightningName.linkingPubKeyHex,
+        }
+      }),
+    )
+
+    return results
   }
 }

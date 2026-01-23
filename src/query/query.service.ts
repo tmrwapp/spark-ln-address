@@ -20,9 +20,11 @@ export class QueryService {
 
   async findLightningNameByUsername(rawUsername: string) {
     const username = normalizeUsername(rawUsername)
-    return this.prisma.lightningName.findFirst({
+    return this.prisma.lightningName.findMany({
       where: {
-        username,
+        username: {
+          contains: username,
+        },
         active: true,
       },
     })
