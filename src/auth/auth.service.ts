@@ -122,8 +122,8 @@ export class AuthService {
       // Convert public key from hex to bytes
       const pubKeyBytes = Buffer.from(key, 'hex')
 
-      // Dynamically import the ESM module at runtime
-      const { verify, hashes } = await import('@noble/secp256k1')
+      // Dynamically import the ESM module at runtime without TS downleveling
+      const { verify, hashes } = await this.loadSecp256k1()
 
       // Set up SHA-256 hash function for @noble/secp256k1 (required for verify)
       if (!hashes.sha256) {
@@ -164,6 +164,15 @@ export class AuthService {
       this.logger.error(`key: ${key}`)
       return false
     }
+  }
+
+  private async loadSecp256k1(): Promise<typeof import('@noble/secp256k1')> {
+    // Prevent TypeScript from rewriting import() to require() in CJS output
+    const importer = new Function('specifier', 'return import(specifier)') as (
+      specifier: string,
+    ) => Promise<typeof import('@noble/secp256k1')>
+
+    return importer('@noble/secp256k1')
   }
 
   /**
