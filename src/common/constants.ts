@@ -1,5 +1,5 @@
 export const LNURL_CONSTANTS = {
   MIN_SENDABLE_MSAT: 1_000, // 1000 msat = 0.001 sats
-  MAX_SENDABLE_MSAT: 100_000_000, // 100,000,000 msat = 100 sats
+  MAX_SENDABLE_MSAT: 10_000_000_000, // 10,000,000,000 msat = 10M sats
   COMMENT_ALLOWED: 120,
 } as const
