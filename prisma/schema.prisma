@@ -10,10 +10,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ReceivingCurrency {
+  SATS
+  USDB
+}
+
 model User {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  defaultReceivingCurrency ReceivingCurrency @default(USDB)
 
   // Relations
   lightningNames LightningName[]
@@ -53,9 +59,72 @@ model Invoice {
   createdAt   DateTime @default(now())
   expiresAt   DateTime // when invoice expires
   status      String   @default("pending") // pending, paid, expired, cancelled
+  receivingCurrency ReceivingCurrency @default(USDB)
+  destinationSparkAddress String?
 
   // Relations
   lightningName LightningName @relation(fields: [usernameId], references: [id], onDelete: Cascade)
+  flashnetOrder FlashnetOrder?
+  refundCase    RefundCase?
 
   @@map("invoices")
+}
+
+model FlashnetOrder {
+  id                        String    @id @default(cuid())
+  invoiceId                 String    @unique
+  quoteId                   String?   @unique
+  orderId                   String?   @unique
+  lightningReceiveRequestId String?   @unique
+  estimatedOut              Decimal?  @db.Decimal(38, 8)
+  lockedMinAmountOut        Decimal?  @db.Decimal(38, 8)
+  actualOut                 Decimal?  @db.Decimal(38, 8)
+  feeAmount                 Decimal?  @db.Decimal(38, 8)
+  roundingFeeAmount         Decimal?  @db.Decimal(38, 8)
+  totalFeeAmount            Decimal?  @db.Decimal(38, 8)
+  feeBps                    Int?
+  feeAsset                  String?
+  route                     String?   @db.Text
+  priceLockMode             String?
+  status                    String?
+  errorCode                 String?
+  errorMessage              String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("flashnet_orders")
+}
+
+model FlashnetWebhookEvent {
+  id          String    @id @default(cuid())
+  orderId     String
+  event       String
+  timestamp   BigInt
+  rawBody     String    @db.Text
+  signature   String
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([orderId, event, timestamp])
+  @@index([orderId])
+  @@map("flashnet_webhook_events")
+}
+
+model RefundCase {
+  id             String    @id @default(cuid())
+  invoiceId      String    @unique
+  amountSats     Int
+  reason         String
+  externalRef    String?
+  payeeLnAddress String?
+  status         String    @default("OPEN")
+  createdAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@map("refund_cases")
 }
