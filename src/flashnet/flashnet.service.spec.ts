@@ -227,6 +227,228 @@ describe('FlashnetService', () => {
       expect(service.verifyWebhookSignature(rawBody, 'short', timestamp)).toBe(false);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // getOrderStatus
+  // -------------------------------------------------------------------------
+
+  describe('getOrderStatus', () => {
+    const ORDER_ID = 'ord_xyz789';
+
+    const SAMPLE_STATUS_RESPONSE: import('./flashnet.types').OrderStatusResponse = {
+      orderId: ORDER_ID,
+      status: 'completed',
+      amountOut: '920000',
+    };
+
+    it('happy path — returns typed OrderStatusResponse', async () => {
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => SAMPLE_STATUS_RESPONSE,
+      } as Response);
+
+      const result = await service.getOrderStatus(ORDER_ID);
+
+      expect(result).toMatchObject({
+        orderId: ORDER_ID,
+        status: 'completed',
+        amountOut: '920000',
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        `https://orchestration.flashnet.xyz/v1/orchestration/order/${ORDER_ID}`,
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer fn_test_key',
+          }),
+        }),
+      );
+    });
+
+    it('happy path — processing status without amountOut', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ orderId: ORDER_ID, status: 'processing' }),
+      } as Response);
+
+      const result = await service.getOrderStatus(ORDER_ID);
+
+      expect(result).toMatchObject({ orderId: ORDER_ID, status: 'processing' });
+    });
+
+    it('non-2xx with JSON error body — throws BadGatewayException with code and message', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: 'unsupported_route', message: 'Order not found' }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.getOrderStatus(ORDER_ID);
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      const body = caught!.getResponse() as Record<string, unknown>;
+      expect(body.code).toBe('unsupported_route');
+      expect(body.message).toBe('Order not found');
+    });
+
+    it('non-2xx with non-JSON error body — throws BadGatewayException with service_unavailable fallback', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => { throw new SyntaxError('Unexpected token'); },
+      } as unknown as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.getOrderStatus(ORDER_ID);
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      const body = caught!.getResponse() as Record<string, unknown>;
+      expect(body.code).toBe('service_unavailable');
+      expect(body.message).toBe('HTTP 503');
+    });
+
+    it('network error — throws ServiceUnavailableException', async () => {
+      jest
+        .spyOn(global, 'fetch')
+        .mockRejectedValueOnce(new TypeError('fetch failed'));
+
+      await expect(service.getOrderStatus(ORDER_ID)).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+    });
+
+    it('builds URL with orderId as path segment', async () => {
+      const specificId = 'ord_path_check';
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ orderId: specificId, status: 'swapping' }),
+      } as Response);
+
+      await service.getOrderStatus(specificId);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        `https://orchestration.flashnet.xyz/v1/orchestration/order/${specificId}`,
+        expect.anything(),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // parseErrorBody — partial JSON body (lines 181-182 ?? fallback branches)
+  // -------------------------------------------------------------------------
+
+  describe('parseErrorBody — partial JSON response', () => {
+    it('non-2xx with JSON body missing code — uses service_unavailable fallback code', async () => {
+      // JSON body has no "code" field: triggers json.code ?? 'service_unavailable'
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        json: async () => ({ message: 'Validation failed' }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-partial-code');
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      const body = caught!.getResponse() as Record<string, unknown>;
+      expect(body.code).toBe('service_unavailable');
+      expect(body.message).toBe('Validation failed');
+    });
+
+    it('non-2xx with JSON body missing message — uses HTTP status fallback message', async () => {
+      // JSON body has no "message" field: triggers json.message ?? `HTTP ${status}`
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ code: 'service_unavailable' }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-partial-msg');
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      const body = caught!.getResponse() as Record<string, unknown>;
+      expect(body.code).toBe('service_unavailable');
+      expect(body.message).toBe('HTTP 500');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // constructor — ?? fallback branches (lines 26-30)
+  // -------------------------------------------------------------------------
+
+  describe('constructor — config fallbacks', () => {
+    it('uses default apiBase when FLASHNET_API_BASE is not configured', async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          FlashnetService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn(() => undefined),
+            },
+          },
+        ],
+      }).compile();
+
+      const svc = module.get(FlashnetService);
+
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => SAMPLE_RESPONSE,
+      } as Response);
+
+      await svc.createOnrampOrder(SAMPLE_REQUEST, 'idem-fallback');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://orchestration.flashnet.xyz/v1/orchestration/onramp',
+        expect.anything(),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // verifyWebhookSignature — catch block (lines 169-173)
+  // -------------------------------------------------------------------------
+
+  describe('verifyWebhookSignature — unexpected crypto error', () => {
+    it('returns false (not throw) when createHmac throws unexpectedly', () => {
+      // Force the catch block by making the webhookSecret something that
+      // triggers an error inside createHmac's update/digest chain.
+      // We temporarily reassign the private field via casting.
+      // createHmac('sha256', null) throws TypeError at runtime — simulates
+      // a bad secret value that bypasses TypeScript's type safety.
+      const svc = service as unknown as { webhookSecret: unknown };
+      const original = svc.webhookSecret;
+
+      svc.webhookSecret = null as unknown as string;
+
+      expect(() =>
+        service.verifyWebhookSignature('body', 'sig', '12345'),
+      ).not.toThrow();
+
+      expect(service.verifyWebhookSignature('body', 'sig', '12345')).toBe(false);
+
+      svc.webhookSecret = original;
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
