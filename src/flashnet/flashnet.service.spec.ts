@@ -1,0 +1,260 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
+import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import { createHmac } from 'crypto';
+import { FlashnetService } from './flashnet.service';
+import { FlashnetMockService } from './flashnet.mock';
+import { FLASHNET_SERVICE, FlashnetModule } from './flashnet.module';
+import { OnrampOrderRequest, OnrampOrderResponse } from './flashnet.types';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeConfigService(overrides: Record<string, string> = {}): Partial<ConfigService> {
+  const defaults: Record<string, string> = {
+    FLASHNET_API_BASE: 'https://orchestration.flashnet.xyz',
+    FLASHNET_API_KEY: 'fn_test_key',
+    FLASHNET_WEBHOOK_SECRET: 'test_webhook_secret',
+    ...overrides,
+  };
+  return {
+    get: jest.fn((key: string) => defaults[key] ?? undefined),
+  };
+}
+
+const SAMPLE_REQUEST: OnrampOrderRequest = {
+  destinationChain: 'spark',
+  destinationAsset: 'USDB',
+  recipientAddress: 'spark1qtest',
+  amount: '1000',
+  amountMode: 'exact_in',
+  slippageBps: 50,
+};
+
+const SAMPLE_RESPONSE: OnrampOrderResponse = {
+  orderId: 'ord_abc123',
+  quoteId: 'q_def456',
+  depositAddress: 'lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdql2pshjmt9de6zqmt9w3skgct5dfskvn0wyfkx7em9wvk2um5nah8aqtqxqyz0vq',
+  amountIn: '1000',
+  estimatedOut: '920000',
+  feeAmount: '10000',
+  roundingFeeAmount: '2162',
+  totalFeeAmount: '12162',
+  feeBps: 41,
+  feeAsset: 'USDB',
+  route: ['BTC', 'USDB'],
+  expiresAt: new Date(Date.now() + 120_000).toISOString(),
+  priceLockMode: 'approval_required',
+  lockedMinAmountOut: '838945',
+  amountMode: 'exact_in',
+  lightningReceiveRequestId: 'SparkLightningReceiveRequest:test-001',
+};
+
+// ---------------------------------------------------------------------------
+// FlashnetService unit tests
+// ---------------------------------------------------------------------------
+
+describe('FlashnetService', () => {
+  let service: FlashnetService;
+  let fetchSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        FlashnetService,
+        { provide: ConfigService, useValue: makeConfigService() },
+      ],
+    }).compile();
+
+    service = module.get(FlashnetService);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // createOnrampOrder
+  // -------------------------------------------------------------------------
+
+  describe('createOnrampOrder', () => {
+    it('happy path — returns typed OnrampOrderResponse', async () => {
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => SAMPLE_RESPONSE,
+      } as Response);
+
+      const result = await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-1');
+
+      expect(result).toMatchObject({
+        orderId: 'ord_abc123',
+        quoteId: 'q_def456',
+        estimatedOut: '920000',
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://orchestration.flashnet.xyz/v1/orchestration/onramp',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer fn_test_key',
+            'X-Idempotency-Key': 'idem-key-1',
+          }),
+        }),
+      );
+    });
+
+    it('400 unsupported_route — throws BadGatewayException', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ code: 'unsupported_route', message: 'Route not supported' }),
+      } as Response);
+
+      await expect(
+        service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-2'),
+      ).rejects.toThrow(BadGatewayException);
+    });
+
+    it('400 unsupported_route — BadGatewayException carries code in response body', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ code: 'unsupported_route', message: 'Route not supported' }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-3');
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      expect((caught!.getResponse() as Record<string, unknown>).code).toBe('unsupported_route');
+    });
+
+    it('429 rate_limited — throws BadGatewayException with code rate_limited', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({ code: 'rate_limited', message: 'Too many requests' }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-4');
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      expect((caught!.getResponse() as Record<string, unknown>).code).toBe('rate_limited');
+    });
+
+    it('409 idempotency_conflict — throws BadGatewayException with code idempotency_conflict', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          code: 'idempotency_conflict',
+          message: 'Conflicting payload for idempotency key',
+        }),
+      } as Response);
+
+      let caught: BadGatewayException | undefined;
+      try {
+        await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-5');
+      } catch (e) {
+        caught = e as BadGatewayException;
+      }
+      expect(caught).toBeInstanceOf(BadGatewayException);
+      expect((caught!.getResponse() as Record<string, unknown>).code).toBe(
+        'idempotency_conflict',
+      );
+    });
+
+    it('network error — throws ServiceUnavailableException', async () => {
+      jest
+        .spyOn(global, 'fetch')
+        .mockRejectedValueOnce(new TypeError('fetch failed'));
+
+      await expect(
+        service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-6'),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // verifyWebhookSignature
+  // -------------------------------------------------------------------------
+
+  describe('verifyWebhookSignature', () => {
+    const secret = 'test_webhook_secret';
+    const timestamp = '1714000000000';
+    const rawBody = JSON.stringify({ orderId: 'ord_abc', event: 'order.completed' });
+
+    function makeSignature(ts: string, body: string): string {
+      return createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex');
+    }
+
+    it('valid signature — returns true', () => {
+      const sig = makeSignature(timestamp, rawBody);
+      expect(service.verifyWebhookSignature(rawBody, sig, timestamp)).toBe(true);
+    });
+
+    it('valid signature with Buffer rawBody — returns true', () => {
+      const sig = makeSignature(timestamp, rawBody);
+      expect(
+        service.verifyWebhookSignature(Buffer.from(rawBody), sig, timestamp),
+      ).toBe(true);
+    });
+
+    it('tampered body — returns false', () => {
+      const sig = makeSignature(timestamp, rawBody);
+      const tamperedBody = rawBody.replace('completed', 'failed');
+      expect(service.verifyWebhookSignature(tamperedBody, sig, timestamp)).toBe(false);
+    });
+
+    it('wrong timestamp — returns false', () => {
+      const sig = makeSignature(timestamp, rawBody);
+      expect(service.verifyWebhookSignature(rawBody, sig, '9999999999999')).toBe(false);
+    });
+
+    it('wrong-length signature — returns false without throwing', () => {
+      // timingSafeEqual throws if lengths differ — our guard must prevent that.
+      expect(() =>
+        service.verifyWebhookSignature(rawBody, 'short', timestamp),
+      ).not.toThrow();
+      expect(service.verifyWebhookSignature(rawBody, 'short', timestamp)).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FlashnetModule factory — mock vs real selection
+// ---------------------------------------------------------------------------
+
+describe('FlashnetModule factory', () => {
+  it('returns FlashnetMockService when FLASHNET_API_KEY is empty', async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [FlashnetModule],
+    })
+      .overrideProvider(ConfigService)
+      .useValue(makeConfigService({ FLASHNET_API_KEY: '' }))
+      .compile();
+
+    const resolved = module.get(FLASHNET_SERVICE);
+    expect(resolved).toBeInstanceOf(FlashnetMockService);
+  });
+
+  it('returns FlashnetService when FLASHNET_API_KEY is set', async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [FlashnetModule],
+    })
+      .overrideProvider(ConfigService)
+      .useValue(makeConfigService({ FLASHNET_API_KEY: 'fn_real_key' }))
+      .compile();
+
+    const resolved = module.get(FLASHNET_SERVICE);
+    expect(resolved).toBeInstanceOf(FlashnetService);
+  });
+});
