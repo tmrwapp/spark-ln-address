@@ -6,5 +6,9 @@
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
+  "transformIgnorePatterns": ["node_modules/(?!@noble/)"],
+  "moduleNameMapper": {
+    "^src/(.*)$": "<rootDir>/../src/$1"
+  },
   "setupFilesAfterEnv": ["<rootDir>/jest-e2e.setup.ts"]
 }

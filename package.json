@@ -31,6 +31,8 @@
     "@noble/secp256k1": "^3.0.0",
     "@prisma/client": "^6.18.0",
     "bech32": "^2.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1"
   },
