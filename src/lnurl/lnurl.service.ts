@@ -16,6 +16,21 @@ export class LnurlService {
     })
   }
 
+  /**
+   * Like findActiveLightningName but includes the associated User so the
+   * caller can read user.defaultReceivingCurrency without a second DB round-trip.
+   */
+  async findActiveLightningNameWithUser(rawUsername: string) {
+    const username = normalizeUsername(rawUsername)
+    return this.prisma.lightningName.findFirst({
+      where: {
+        username,
+        active: true,
+      },
+      include: { user: true },
+    })
+  }
+
   async createInvoice(data: {
     usernameId: string
     amountMsat: bigint

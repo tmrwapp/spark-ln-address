@@ -84,3 +84,7 @@ await fetch('https://api.example.com' + url, {
 | Timestamp non-numeric or skew > limit | 401 | `Timestamp out of range` |
 | Signature verification fails | 401 | `Invalid signature` |
 | No active `LightningName` for pubkey | 401 | `Unknown pubkey` |
+
+### Non-goals / trajectory
+
+**Replay-protection LRU:** adding an in-memory LRU of `(pubkey, timestamp, sigHash)` tuples to `SparkSignatureGuard` is deferred. The `/lnurl/callback/:user` USDB path (PR5) is unauthenticated per LNURL spec, so the guard does not apply there. The existing signed endpoints (`GET/PATCH /v1/users/me/currency`) are idempotent — a replayed PATCH with the same value is a no-op — and the 60 s skew window (`AUTH_MAX_SKEW_MS`) already bounds the replay window. Revisit when a non-idempotent signed endpoint ships.

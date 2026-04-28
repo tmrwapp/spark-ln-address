@@ -82,7 +82,12 @@ describe('LnurlService', () => {
         status: 'pending',
       }
 
-      const mockInvoice = { id: 'invoice-1', ...invoiceData }
+      const mockInvoice = {
+        id: 'invoice-1',
+        ...invoiceData,
+        receivingCurrency: 'USDB' as any,
+        destinationSparkAddress: null,
+      }
 
       jest.spyOn(prismaService.invoice, 'create').mockResolvedValue(mockInvoice)
 
@@ -94,9 +99,39 @@ describe('LnurlService', () => {
       expect(result).toEqual(mockInvoice)
     })
   })
+
+  // ---------------------------------------------------------------------------
+  // PR5 additions
+  // ---------------------------------------------------------------------------
+
+  describe('findActiveLightningNameWithUser', () => {
+    it('normalizes username and calls findFirst with include: { user: true }', async () => {
+      const mockResult = {
+        id: 'ln-1',
+        username: 'bob',
+        userId: 'u-1',
+        linkingPubKeyHex: 'pubkey-hex',
+        active: true,
+        user: { id: 'u-1', defaultReceivingCurrency: 'USDB' },
+      }
+
+      jest.spyOn(prismaService.lightningName, 'findFirst').mockResolvedValue(mockResult as any)
+
+      const result = await service.findActiveLightningNameWithUser('BOB')
+
+      expect(prismaService.lightningName.findFirst).toHaveBeenCalledWith({
+        where: { username: 'bob', active: true },
+        include: { user: true },
+      })
+      expect(result).toEqual(mockResult)
+    })
+
+    it('returns null when username not found', async () => {
+      jest.spyOn(prismaService.lightningName, 'findFirst').mockResolvedValue(null)
+
+      const result = await service.findActiveLightningNameWithUser('ghost')
+
+      expect(result).toBeNull()
+    })
+  })
 })
-
-
-
-
-
