@@ -23,6 +23,7 @@
     "test:e2e:full": "npm run test:e2e:setup && npm run test:e2e && npm run test:e2e:teardown"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^2.3.1",
     "@buildonspark/spark-sdk": "^0.7.14",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^4.0.2",

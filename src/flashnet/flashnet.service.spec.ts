@@ -32,7 +32,7 @@ const SAMPLE_REQUEST: OnrampOrderRequest = {
   slippageBps: 50,
 };
 
-const SAMPLE_RESPONSE: OnrampOrderResponse = {
+const SAMPLE_RESPONSE: Omit<OnrampOrderResponse, 'replayed'> = {
   orderId: 'ord_abc123',
   quoteId: 'q_def456',
   depositAddress: 'lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdql2pshjmt9de6zqmt9w3skgct5dfskvn0wyfkx7em9wvk2um5nah8aqtqxqyz0vq',
@@ -50,6 +50,15 @@ const SAMPLE_RESPONSE: OnrampOrderResponse = {
   amountMode: 'exact_in',
   lightningReceiveRequestId: 'SparkLightningReceiveRequest:test-001',
 };
+
+/** Helper: builds a mock Response-like object for a successful onramp call. */
+function makeOkOnrampResponse(replayedHeader = 'false') {
+  return {
+    ok: true,
+    headers: { get: (name: string) => (name === 'x-idempotency-replayed' ? replayedHeader : null) },
+    json: async () => SAMPLE_RESPONSE,
+  } as unknown as Response;
+}
 
 // ---------------------------------------------------------------------------
 // FlashnetService unit tests
@@ -79,11 +88,8 @@ describe('FlashnetService', () => {
   // -------------------------------------------------------------------------
 
   describe('createOnrampOrder', () => {
-    it('happy path — returns typed OnrampOrderResponse', async () => {
-      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        json: async () => SAMPLE_RESPONSE,
-      } as Response);
+    it('happy path — returns typed OnrampOrderResponse with replayed: false', async () => {
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce(makeOkOnrampResponse());
 
       const result = await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-key-1');
 
@@ -91,6 +97,7 @@ describe('FlashnetService', () => {
         orderId: 'ord_abc123',
         quoteId: 'q_def456',
         estimatedOut: '920000',
+        replayed: false,
       });
       expect(fetchSpy).toHaveBeenCalledWith(
         'https://orchestration.flashnet.xyz/v1/orchestration/onramp',
@@ -102,6 +109,38 @@ describe('FlashnetService', () => {
           }),
         }),
       );
+    });
+
+    // -------------------------------------------------------------------------
+    // PR5: X-Idempotency-Replayed header surfacing
+    // -------------------------------------------------------------------------
+
+    it('X-Idempotency-Replayed: true — returns replayed: true', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce(makeOkOnrampResponse('true'));
+
+      const result = await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-replayed-true');
+
+      expect(result.replayed).toBe(true);
+    });
+
+    it('X-Idempotency-Replayed header absent (null) — returns replayed: false', async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        headers: { get: (_name: string) => null },
+        json: async () => SAMPLE_RESPONSE,
+      } as unknown as Response);
+
+      const result = await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-no-header');
+
+      expect(result.replayed).toBe(false);
+    });
+
+    it("X-Idempotency-Replayed: 'false' string — returns replayed: false", async () => {
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce(makeOkOnrampResponse('false'));
+
+      const result = await service.createOnrampOrder(SAMPLE_REQUEST, 'idem-false-string');
+
+      expect(result.replayed).toBe(false);
     });
 
     it('400 unsupported_route — throws BadGatewayException', async () => {
@@ -410,10 +449,7 @@ describe('FlashnetService', () => {
 
       const svc = module.get(FlashnetService);
 
-      jest.spyOn(global, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        json: async () => SAMPLE_RESPONSE,
-      } as Response);
+      jest.spyOn(global, 'fetch').mockResolvedValueOnce(makeOkOnrampResponse());
 
       await svc.createOnrampOrder(SAMPLE_REQUEST, 'idem-fallback');
 

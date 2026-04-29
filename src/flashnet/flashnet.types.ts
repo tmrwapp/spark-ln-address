@@ -43,6 +43,12 @@ export interface OnrampOrderResponse {
   lightningReceiveRequestId: string;
   /** Ephemeral payer affordances; shape may vary. Not persisted in v1. */
   paymentLinks?: Record<string, unknown>;
+  /**
+   * True when Flashnet replayed a cached response for the same X-Idempotency-Key.
+   * Surfaced from the X-Idempotency-Replayed response header by FlashnetService.
+   * Always false in FlashnetMockService.
+   */
+  replayed: boolean;
 }
 
 export interface OrderStatusResponse {

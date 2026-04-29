@@ -77,7 +77,9 @@ export class FlashnetService {
       });
     }
 
-    return response.json() as Promise<OnrampOrderResponse>;
+    const replayed = response.headers.get('x-idempotency-replayed') === 'true';
+    const body = (await response.json()) as Omit<OnrampOrderResponse, 'replayed'>;
+    return { ...body, replayed };
   }
 
   /**

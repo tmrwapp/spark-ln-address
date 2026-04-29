@@ -40,6 +40,7 @@ export class FlashnetMockService {
       lockedMinAmountOut: '838945',
       amountMode: 'exact_in',
       lightningReceiveRequestId: `SparkLightningReceiveRequest:mock-${randomHex(8)}`,
+      replayed: false,
     };
   }
 
