@@ -390,9 +390,7 @@ describe('SwapService', () => {
 
       expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
       expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'swap.webhook.stale_or_out_of_order' }),
-      )
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ignored (stale)'))
     })
 
     it('idempotent redelivery (DELIVERING → DELIVERING) — no order update, marks webhook processed', async () => {
@@ -429,9 +427,7 @@ describe('SwapService', () => {
 
       await service.applyWebhookEvent({ ...BASE_PAYLOAD, event: 'order.failed', data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } } })
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'swap.refund_case_needed' }),
-      )
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('refund case needed'))
     })
 
     // -------------------------------------------------------------------------
@@ -527,14 +523,11 @@ describe('SwapService', () => {
         },
       })
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'swap.refund_case_needed',
-          orderId: 'ord_deliver_fail',
-          invoiceId: 'inv-2',
-          amountSats: 2000, // Math.floor(2_000_000 / 1000)
-        }),
-      )
+      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
+      expect(msg).toContain('[ord_deliver_fail]')
+      expect(msg).toContain('DELIVERING->FAILED')
+      expect(msg).toContain('invoice=inv-2')
+      expect(msg).toContain('sats=2000') // Math.floor(2_000_000 / 1000)
     })
 
     it('DELIVERING → FAILED — refund_case_needed log sets amountSats to null when invoice is absent', async () => {
@@ -567,12 +560,8 @@ describe('SwapService', () => {
         },
       })
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'swap.refund_case_needed',
-          amountSats: null,
-        }),
-      )
+      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
+      expect(msg).toContain('sats=null')
     })
 
     // -------------------------------------------------------------------------

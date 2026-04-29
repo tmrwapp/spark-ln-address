@@ -252,42 +252,23 @@ describe('FlashnetWebhookController', () => {
   // -------------------------------------------------------------------------
 
   describe('logging', () => {
-    it('logs flashnet.webhook.received with orderId and webhookEvent', async () => {
-      const logSpy = jest.spyOn(controller['logger'], 'log')
-      const req = makeRequest()
-
-      await controller.handleWebhook(req)
-
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'flashnet.webhook.received',
-          orderId: 'ord_test_001',   // resolved from data.id
-          webhookEvent: 'order.completed',
-        }),
-      )
-    })
-
-    it('missing headers → logs flashnet.webhook.missing_headers warning', async () => {
+    it('missing headers → warn with concise HMAC summary', async () => {
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
       const req = makeRequest({ headers: {} })
 
       await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'flashnet.webhook.missing_headers' }),
-      )
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('missing HMAC headers'))
     })
 
-    it('invalid HMAC → logs flashnet.webhook.invalid_signature warning', async () => {
+    it('invalid HMAC → warn with invalid-signature summary', async () => {
       await buildModule(false)
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
       const req = makeRequest()
 
       await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'flashnet.webhook.invalid_signature' }),
-      )
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid HMAC signature'))
     })
   })
 })

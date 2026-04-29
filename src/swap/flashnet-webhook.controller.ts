@@ -44,10 +44,7 @@ export class FlashnetWebhookController {
     // Raw body must be present — wired by NestFactory.create({ rawBody: true }).
     const rawBody: Buffer | undefined = (req as Request & { rawBody?: Buffer }).rawBody
     if (!rawBody) {
-      this.logger.error({
-        event: 'flashnet.webhook.missing_raw_body',
-        url: req.url,
-      })
+      this.logger.error(`raw body missing on ${req.url}`)
       // 400 semantics: raw-body wiring is broken — server configuration error.
       throw Object.assign(new Error('Raw body unavailable'), { status: 400 })
     }
@@ -56,21 +53,16 @@ export class FlashnetWebhookController {
     const timestamp = (req.headers['x-flashnet-timestamp'] as string) ?? ''
 
     if (!signature || !timestamp) {
-      this.logger.warn({
-        event: 'flashnet.webhook.missing_headers',
-        hasSignature: Boolean(signature),
-        hasTimestamp: Boolean(timestamp),
-      })
+      this.logger.warn(
+        `missing HMAC headers (sig=${Boolean(signature)} ts=${Boolean(timestamp)})`,
+      )
       throw new UnauthorizedException('Missing HMAC signature headers')
     }
 
     // HMAC verification — constant-time comparison inside FlashnetService.
     const valid = this.flashnet.verifyWebhookSignature(rawBody, signature, timestamp)
     if (!valid) {
-      this.logger.warn({
-        event: 'flashnet.webhook.invalid_signature',
-        timestamp,
-      })
+      this.logger.warn(`invalid HMAC signature (ts=${timestamp})`)
       throw new UnauthorizedException('Invalid webhook signature')
     }
 
@@ -79,10 +71,7 @@ export class FlashnetWebhookController {
     try {
       payload = JSON.parse(rawBody.toString('utf8')) as FlashnetWebhookPayload
     } catch (err) {
-      this.logger.warn({
-        event: 'flashnet.webhook.parse_error',
-        error: String(err),
-      })
+      this.logger.warn(`webhook body parse error: ${String(err)}`)
       // Malformed JSON after valid HMAC — unusual; return 204 to stop retries.
       return
     }
@@ -90,13 +79,6 @@ export class FlashnetWebhookController {
     // Stamp the timestamp from the header into the payload so applyWebhookEvent
     // can use it for the dedupe key without trusting the body timestamp.
     payload.timestamp = timestamp
-
-    this.logger.log({
-      event: 'flashnet.webhook.received',
-      orderId: payload.data.id,
-      webhookEvent: payload.event,
-      timestamp,
-    })
 
     await this.swapService.applyWebhookEvent(payload)
     // Always return 204 — Flashnet interprets any 2xx as acknowledged.

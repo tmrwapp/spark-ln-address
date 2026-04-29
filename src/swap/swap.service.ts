@@ -54,12 +54,6 @@ export class SwapService {
   async initiateOnramp(params: InitiateOnrampParams): Promise<InitiateOnrampResult> {
     const { idempotencyKey, amountSats, amountMsat, recipientSparkAddress, lightningNameId } = params
 
-    this.logger.log({
-      event: 'swap.initiateOnramp.start',
-      idempotencyKey,
-      amountSats,
-    })
-
     // Call Flashnet — throws BadGatewayException / ServiceUnavailableException on error.
     const response = await this.flashnet.createOnrampOrder(
       {
@@ -79,11 +73,7 @@ export class SwapService {
     // Defensive: with fresh cuids per request, replayed:true is unreachable in
     // normal operation, but guards against internal retries or fetch-layer changes.
     if (response.replayed) {
-      this.logger.log({
-        event: 'swap.initiateOnramp.replayed',
-        idempotencyKey,
-        orderId: response.orderId,
-      })
+      this.logger.warn(`[${response.orderId}] flashnet replayed (key=${idempotencyKey})`)
 
       const existing = await this.prisma.flashnetOrder.findUnique({
         where: { invoiceId: idempotencyKey },
@@ -135,11 +125,9 @@ export class SwapService {
       })
     })
 
-    this.logger.log({
-      event: 'swap.initiateOnramp.success',
-      idempotencyKey,
-      orderId: response.orderId,
-    })
+    this.logger.log(
+      `[${response.orderId}] order created (invoice=${idempotencyKey} sats=${amountSats})`,
+    )
 
     return { bolt11, replayed: false }
   }
@@ -181,14 +169,9 @@ export class SwapService {
         update: {},
       })
 
-      // If already processed, skip — idempotent re-ingest.
+      // If already processed, skip — idempotent re-ingest. Silent: this is
+      // expected on Flashnet redelivery and would only add noise to logs.
       if (webhookEvent.processedAt !== null) {
-        this.logger.log({
-          event: 'swap.webhook.already_processed',
-          orderId,
-          webhookEvent: event,
-          timestamp,
-        })
         return
       }
 
@@ -199,11 +182,7 @@ export class SwapService {
       })
 
       if (!flashnetOrder) {
-        this.logger.warn({
-          event: 'swap.webhook.unknown_order',
-          orderId,
-          webhookEvent: event,
-        })
+        this.logger.warn(`[${orderId}] unknown order (${event})`)
         // Mark the webhook event as processed so we don't log this repeatedly on replay.
         await tx.flashnetWebhookEvent.update({
           where: { id: webhookEvent.id },
@@ -215,18 +194,11 @@ export class SwapService {
       // Classify the transition. Webhook deliveries are at-least-once and not
       // strictly ordered, so duplicate (noop) and stale (skip) cases are
       // expected — handle them without throwing back to the controller.
-      const decision = classifyTransition(
-        flashnetOrder.status as any,
-        mapEventToStatus(event),
-      )
+      const attemptedStatus = mapEventToStatus(event)
+      const decision = classifyTransition(flashnetOrder.status as any, attemptedStatus)
 
       if (decision.kind === 'noop') {
-        this.logger.log({
-          event: 'swap.webhook.idempotent_redelivery',
-          orderId,
-          status: flashnetOrder.status,
-          webhookEvent: event,
-        })
+        this.logger.log(`[${orderId}] ${flashnetOrder.status} (redelivery)`)
         await tx.flashnetWebhookEvent.update({
           where: { id: webhookEvent.id },
           data: { processedAt: new Date() },
@@ -235,13 +207,9 @@ export class SwapService {
       }
 
       if (decision.kind === 'skip') {
-        this.logger.warn({
-          event: 'swap.webhook.stale_or_out_of_order',
-          orderId,
-          currentStatus: flashnetOrder.status,
-          webhookEvent: event,
-          allowed: decision.allowed,
-        })
+        this.logger.warn(
+          `[${orderId}] ${flashnetOrder.status}->${attemptedStatus} ignored (stale)`,
+        )
         await tx.flashnetWebhookEvent.update({
           where: { id: webhookEvent.id },
           data: { processedAt: new Date() },
@@ -289,23 +257,24 @@ export class SwapService {
       // TODO(PR8): replace this log with RefundCaseService.createRefundCase() once
       // the refund-case module is merged from the feat/refund-case branch.
       if (event === 'order.failed' && flashnetOrder.status === FLASHNET_ORDER_STATUS.DELIVERING) {
-        this.logger.warn({
-          event: 'swap.refund_case_needed',
-          orderId,
-          invoiceId: flashnetOrder.invoiceId,
-          amountSats: flashnetOrder.invoice?.amountMsat
-            ? Math.floor(Number(flashnetOrder.invoice.amountMsat) / 1000)
-            : null,
-        })
+        const amountSats = flashnetOrder.invoice?.amountMsat
+          ? Math.floor(Number(flashnetOrder.invoice.amountMsat) / 1000)
+          : null
+        this.logger.warn(
+          `[${orderId}] DELIVERING->FAILED refund case needed (invoice=${flashnetOrder.invoiceId} sats=${amountSats})`,
+        )
       }
 
-      this.logger.log({
-        event: 'swap.webhook.applied',
-        orderId,
-        webhookEvent: event,
-        previousStatus: flashnetOrder.status,
-        nextStatus,
-      })
+      let finalSummary: string | undefined
+      if (nextStatus === FLASHNET_ORDER_STATUS.DELIVERED) {
+        const amountSats = Number(flashnetOrder.invoice?.amountMsat) / 1e3
+        const amountUsdb = Intl.NumberFormat('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 6,
+        }).format(Number(updateData.actualOut))
+        finalSummary = `, received [${amountSats} sats], delivered [${amountUsdb} USDB]`
+      }
+      this.logger.log(`[${orderId}] ${flashnetOrder.status}->${nextStatus} ${finalSummary ?? ''}`)
     })
   }
 }
