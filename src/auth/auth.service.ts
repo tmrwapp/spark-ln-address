@@ -59,7 +59,7 @@ export class AuthService {
     // Validate input formats before verifying (preserve existing behaviour)
     if (!/^[0-9a-fA-F]{64}$/.test(k1)) {
       this.logger.error(`Invalid k1: ${k1}`)
-      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid signature' })
+      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid k1' })
     }
 
     if (!/^[0-9a-fA-F]+$/.test(sig)) {
@@ -69,7 +69,7 @@ export class AuthService {
 
     if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
       this.logger.error(`Invalid key: ${key}`)
-      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid signature' })
+      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid key' })
     }
 
     // Verify secp256k1 signature

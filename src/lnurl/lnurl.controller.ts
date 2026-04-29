@@ -1,4 +1,4 @@
-import { Controller, Get, Param, NotFoundException, Query, BadRequestException, Logger } from '@nestjs/common'
+import { Controller, Get, Param, NotFoundException, Query, BadRequestException, BadGatewayException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createId } from '@paralleldrive/cuid2'
 import { LnurlService } from './lnurl.service'
@@ -7,6 +7,7 @@ import { LnurlPayMetadataDto } from '../common/lnurl-pay-metadata.dto'
 import { LnurlCallbackResponseDto } from '../common/lnurl-callback-response.dto'
 import { LNURL_CONSTANTS } from '../common/constants'
 import { getDomainFromBaseUrl } from '../common/utils'
+import type { SparkNetwork } from '../common/spark-address.utils'
 import { encodeSparkAddress } from '../common/spark-address.utils'
 import { SwapService } from '../swap/swap.service'
 
@@ -135,7 +136,7 @@ export class LnurlController {
     // Step 1: derive recipient Spark address
     let recipient: string
     try {
-      const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as import('../common/spark-address.utils').SparkNetwork
+      const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as SparkNetwork
       recipient = await encodeSparkAddress(lightningName.linkingPubKeyHex, sparkNetwork)
     } catch (err) {
       this.logger.warn({
@@ -171,8 +172,9 @@ export class LnurlController {
       })
 
       const code: string =
-        (err?.response as any)?.code ??
-        (typeof err?.message === 'string' ? err.message : 'service_unavailable')
+        err instanceof BadGatewayException
+          ? ((err.getResponse() as Record<string, unknown>)?.code as string | undefined) ?? err.message
+          : (typeof err?.message === 'string' ? err.message : 'service_unavailable')
       return { status: 'ERROR', reason: code }
     }
 

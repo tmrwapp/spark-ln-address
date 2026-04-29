@@ -68,16 +68,86 @@ export interface OrderStatusResponse {
   errorMessage?: string;
 }
 
-export type FlashnetErrorCode =
+/**
+ * Error codes returned synchronously on Flashnet HTTP API calls (4xx/5xx).
+ * Used in FlashnetService.createOnrampOrder and FlashnetApiError.
+ */
+export type FlashnetApiErrorCode =
   | 'unsupported_route'
   | 'invalid_address'
   | 'rate_limited'
   | 'service_unavailable'
   | 'idempotency_conflict'
   | 'quote_expired'
-  | 'slippage_exceeded';
+
+/**
+ * Error codes that appear in terminal webhook events (order.failed, order.refunded).
+ * Persisted to FlashnetOrder.errorCode by the webhook handler.
+ */
+export type FlashnetWebhookErrorCode =
+  | 'slippage_exceeded'
+  | 'target_unmet'
+  | 'delivery_failed'
+
+/**
+ * Union of all known Flashnet error codes (API + webhook).
+ * @deprecated Prefer FlashnetApiErrorCode or FlashnetWebhookErrorCode for new code.
+ */
+export type FlashnetErrorCode = FlashnetApiErrorCode | FlashnetWebhookErrorCode
 
 export interface FlashnetApiError {
-  code: FlashnetErrorCode;
-  message: string;
+  code: FlashnetApiErrorCode
+  message: string
+}
+
+/**
+ * Parsed representation of a Flashnet webhook delivery.
+ *
+ * Envelope shape per docs (https://docs.flashnet.xyz/products/orchestration/api/webhook-events):
+ *
+ *   {
+ *     "event": "order.<status>",          // top-level
+ *     "timestamp": "2026-02-04T01:30:47.000Z", // ISO 8601; top-level
+ *     "data": {                            // full order snapshot
+ *       "id": "ord_...",
+ *       "amountOut": string | null,
+ *       "feeAmount": string,
+ *       "error": { "code": string | null, "message": string | null },
+ *       ...
+ *     }
+ *   }
+ *
+ * The raw body is preserved separately for HMAC verification.
+ * `timestamp` is overwritten by the controller with the X-Flashnet-Timestamp
+ * header value (millisecond epoch string) before dispatch to SwapService, so
+ * the BigInt conversion in applyWebhookEvent remains correct.
+ */
+export interface FlashnetWebhookData {
+  /** Order ID (ord_...). */
+  id: string
+  /** Partner-visible order status string. */
+  status: string
+  /** Output amount in smallest units; null until delivery. */
+  amountOut: string | null
+  /** Platform fee in smallest units. Always present. */
+  feeAmount: string
+  /** Error details; code/message are null unless order has failed or requires action. */
+  error: {
+    code: string | null
+    message: string | null
+  }
+}
+
+export interface FlashnetWebhookPayload {
+  /** Webhook event name, e.g. "order.processing", "order.completed". */
+  event: string
+  /**
+   * ISO 8601 delivery timestamp from the envelope.
+   * The controller overwrites this with the X-Flashnet-Timestamp header
+   * (millisecond epoch string) before passing to applyWebhookEvent, so the
+   * dedupe key BigInt conversion is correct regardless of body timestamp format.
+   */
+  timestamp: string
+  /** Full order snapshot at the moment the event was emitted. */
+  data: FlashnetWebhookData
 }

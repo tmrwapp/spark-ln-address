@@ -272,10 +272,12 @@ describe('FlashnetService', () => {
   // -------------------------------------------------------------------------
 
   describe('getOrderStatus', () => {
-    const ORDER_ID = 'ord_xyz789';
+    // NOTE: getOrderStatus now uses quoteId (query param), confirmed from Flashnet OpenAPI.
+    // The variable name is kept as ORDER_ID here for test readability; use quoteId values in new tests.
+    const ORDER_ID = 'q_xyz789';
 
     const SAMPLE_STATUS_RESPONSE: import('./flashnet.types').OrderStatusResponse = {
-      orderId: ORDER_ID,
+      orderId: 'ord_xyz789',
       status: 'completed',
       amountOut: '920000',
     };
@@ -289,12 +291,12 @@ describe('FlashnetService', () => {
       const result = await service.getOrderStatus(ORDER_ID);
 
       expect(result).toMatchObject({
-        orderId: ORDER_ID,
+        orderId: 'ord_xyz789',
         status: 'completed',
         amountOut: '920000',
       });
       expect(fetchSpy).toHaveBeenCalledWith(
-        `https://orchestration.flashnet.xyz/v1/orchestration/order/${ORDER_ID}`,
+        `https://orchestration.flashnet.xyz/v1/orchestration/order?quoteId=${ORDER_ID}`,
         expect.objectContaining({
           method: 'GET',
           headers: expect.objectContaining({
@@ -365,8 +367,8 @@ describe('FlashnetService', () => {
       );
     });
 
-    it('builds URL with orderId as path segment', async () => {
-      const specificId = 'ord_path_check';
+    it('builds URL with quoteId as query parameter (confirmed from Flashnet OpenAPI)', async () => {
+      const specificId = 'q_path_check';
       fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
         ok: true,
         json: async () => ({ orderId: specificId, status: 'swapping' }),
@@ -375,9 +377,46 @@ describe('FlashnetService', () => {
       await service.getOrderStatus(specificId);
 
       expect(fetchSpy).toHaveBeenCalledWith(
-        `https://orchestration.flashnet.xyz/v1/orchestration/order/${specificId}`,
+        `https://orchestration.flashnet.xyz/v1/orchestration/order?quoteId=${specificId}`,
         expect.anything(),
       );
+    });
+
+    it('concern #5 — URL contains ?quoteId= (not a path param) so future renames cannot silently break routing', async () => {
+      // This test verifies that the URL shape matches the Flashnet OpenAPI spec:
+      // GET /v1/orchestration/order?quoteId=<value> (query param, NOT path param).
+      // NOTE: The method name still says "orderId" for backward compat (JSDoc says rename in PR7).
+      // A JSDoc update on getOrderStatus to reflect the quoteId semantics is flagged for QA.
+      const quoteId = 'q_abc123';
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ orderId: 'ord_abc123', status: 'completed' }),
+      } as Response);
+
+      await service.getOrderStatus(quoteId);
+
+      const calledUrl = (fetchSpy.mock.calls[0] as [string, unknown])[0];
+      expect(calledUrl).toContain('?quoteId=');
+      expect(calledUrl).not.toMatch(/\/order\/[^?]/); // Must NOT be a path param
+    });
+
+    it('concern #5 — quoteId with special chars is percent-encoded via encodeURIComponent', async () => {
+      // quoteIds with special characters (e.g. "q abc+def") must be percent-encoded
+      // so they do not break the query string. encodeURIComponent is called in the impl.
+      const quoteIdWithSpecialChars = 'q abc+def=xyz';
+      const encoded = encodeURIComponent(quoteIdWithSpecialChars);
+
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ orderId: 'ord_special', status: 'processing' }),
+      } as Response);
+
+      await service.getOrderStatus(quoteIdWithSpecialChars);
+
+      const calledUrl = (fetchSpy.mock.calls[0] as [string, unknown])[0];
+      expect(calledUrl).toContain(`?quoteId=${encoded}`);
+      // Raw (unencoded) string must NOT appear in the URL.
+      expect(calledUrl).not.toContain(quoteIdWithSpecialChars);
     });
   });
 

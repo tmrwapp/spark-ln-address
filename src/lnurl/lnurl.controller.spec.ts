@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing'
-import { NotFoundException, BadRequestException } from '@nestjs/common'
+import { NotFoundException, BadRequestException, BadGatewayException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { LnurlController } from './lnurl.controller'
 import { LnurlService } from './lnurl.service'
@@ -286,9 +286,8 @@ describe('LnurlController', () => {
       expect(swapService.initiateOnramp).not.toHaveBeenCalled()
     })
 
-    it('SwapService.initiateOnramp throws with err.response.code → returns { status: ERROR, reason: code }, no DB cleanup', async () => {
-      const apiError: any = new Error('Flashnet error')
-      apiError.response = { code: 'unsupported_route' }
+    it('SwapService.initiateOnramp throws BadGatewayException with code → returns { status: ERROR, reason: code }, no DB cleanup', async () => {
+      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
       swapService.initiateOnramp.mockRejectedValueOnce(apiError)
 
       const result = await controller.handleLnurlCallback('alice', '1000')
