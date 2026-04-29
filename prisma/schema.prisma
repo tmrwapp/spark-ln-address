@@ -16,7 +16,7 @@ enum ReceivingCurrency {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid(2))
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   defaultReceivingCurrency ReceivingCurrency @default(USDB)
@@ -28,7 +28,7 @@ model User {
 }
 
 model LightningName {
-  id                  String  @id @default(cuid())
+  id                  String  @id @default(cuid(2))
   username            String  @unique
   userId              String
   linkingPubKeyHex    String  @unique // secp256k1 public key hex for LNURL-Auth
@@ -42,7 +42,7 @@ model LightningName {
 }
 
 model AuthNonce {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid(2))
   k1           String   @unique // 32-byte hex nonce for LNURL-Auth
   expiresAt    DateTime
   usedAt       DateTime?
@@ -52,7 +52,7 @@ model AuthNonce {
 }
 
 model Invoice {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid(2))
   usernameId  String
   amountMsat  BigInt   // amount in milli-satoshi
   bolt11      String   @db.Text // BOLT11 invoice string
@@ -71,7 +71,7 @@ model Invoice {
 }
 
 model FlashnetOrder {
-  id                        String    @id @default(cuid())
+  id                        String    @id @default(cuid(2))
   invoiceId                 String    @unique
   quoteId                   String?   @unique
   orderId                   String?   @unique
@@ -99,7 +99,7 @@ model FlashnetOrder {
 }
 
 model FlashnetWebhookEvent {
-  id          String    @id @default(cuid())
+  id          String    @id @default(cuid(2))
   orderId     String
   event       String
   timestamp   BigInt
@@ -114,7 +114,7 @@ model FlashnetWebhookEvent {
 }
 
 model RefundCase {
-  id             String    @id @default(cuid())
+  id             String    @id @default(cuid(2))
   invoiceId      String    @unique
   amountSats     Int
   reason         String
