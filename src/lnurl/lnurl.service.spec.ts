@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing'
 import { LnurlService } from './lnurl.service'
 import { PrismaService } from '../prisma/prisma.service'
+import { ReceivingCurrency } from '@prisma/client'
 
 describe('LnurlService', () => {
   let service: LnurlService
@@ -85,7 +86,7 @@ describe('LnurlService', () => {
       const mockInvoice = {
         id: 'invoice-1',
         ...invoiceData,
-        receivingCurrency: 'USDB' as any,
+        receivingCurrency: ReceivingCurrency.USDB,
         destinationSparkAddress: null,
       }
 

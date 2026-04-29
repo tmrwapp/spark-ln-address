@@ -83,17 +83,18 @@ export class FlashnetService {
   }
 
   /**
-   * GET /v1/orchestration/order/:orderId
+   * GET /v1/orchestration/order?quoteId=...
    * Poll-based fallback for order status when webhooks are missed.
    *
-   * NOTE: Spec §7 cites "/v1/orchestration/order" (without trailing ID segment)
-   * but the Flashnet quotes-and-orders page strongly implies a path-param form.
-   * We use "/v1/orchestration/order/:orderId" here as the most common REST
-   * pattern. If Flashnet's actual API differs, this path should be adjusted and
-   * flagged for PR6.
+   * Confirmed against Flashnet OpenAPI (PR6): the endpoint is
+   * GET /v1/orchestration/order with a required "quoteId" query parameter —
+   * NOT a path-param form (/order/:orderId). The parameter name is "quoteId",
+   * so callers should pass the FlashnetOrder.quoteId value here, not orderId.
+   * The method signature keeps "orderId" in name only for backward compat;
+   * rename to quoteId in PR7 when the scheduler wires this up.
    */
-  async getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
-    const url = `${this.apiBase}/v1/orchestration/order/${orderId}`;
+  async getOrderStatus(quoteId: string): Promise<OrderStatusResponse> {
+    const url = `${this.apiBase}/v1/orchestration/order?quoteId=${encodeURIComponent(quoteId)}`;
     let response: Response;
 
     try {
@@ -108,7 +109,7 @@ export class FlashnetService {
         {
           event: 'flashnet.network_error',
           url,
-          orderId,
+          quoteId,
           error: String(networkError),
         },
         'Flashnet network error on getOrderStatus',
@@ -121,7 +122,7 @@ export class FlashnetService {
       this.logger.warn(
         {
           event: 'flashnet.order_status_error',
-          orderId,
+          quoteId,
           status: response.status,
           code: errorBody.code,
         },

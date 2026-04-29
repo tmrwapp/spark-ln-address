@@ -3,6 +3,8 @@ import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { Prisma } from '@prisma/client'
+import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
+import { FLASHNET_ORDER_STATUS } from './flashnet-order-status'
 
 // ---------------------------------------------------------------------------
 // Helpers / mocks
@@ -42,7 +44,15 @@ function baseFlashnetMock() {
 function makePrismaMock() {
   const txMock = {
     invoice: { create: jest.fn().mockResolvedValue({}) },
-    flashnetOrder: { create: jest.fn().mockResolvedValue({}) },
+    flashnetOrder: {
+      create: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue({}),
+    },
+    flashnetWebhookEvent: {
+      upsert: jest.fn().mockResolvedValue({ id: 'wh-1', processedAt: null }),
+      update: jest.fn().mockResolvedValue({}),
+    },
   }
 
   return {
@@ -128,7 +138,7 @@ describe('SwapService', () => {
       const txOrderCreate = prismaMock._txMock.flashnetOrder.create.mock.calls[0][0]
       expect(txOrderCreate.data.invoiceId).toBe(BASE_PARAMS.idempotencyKey)
       expect(txOrderCreate.data.orderId).toBe('ord_test_001')
-      expect(txOrderCreate.data.status).toBe('PENDING_PAYMENT')
+      expect(txOrderCreate.data.status).toBe(FLASHNET_ORDER_STATUS.PENDING_PAYMENT)
       // "920000" smallest units → 0.92 USDB
       expect(txOrderCreate.data.estimatedOut.equals(new Prisma.Decimal('0.92'))).toBe(true)
       // "10000" → 0.01 USDB
@@ -279,6 +289,452 @@ describe('SwapService', () => {
 
       expect(result.bolt11).toBe(MOCK_BOLT11)
       expect(prismaMock.$transaction).not.toHaveBeenCalled()
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // PR6 additions — applyWebhookEvent
+  // ---------------------------------------------------------------------------
+
+  describe('applyWebhookEvent', () => {
+    const BASE_ORDER = {
+      id: 'fo-1',
+      invoiceId: 'inv-1',
+      orderId: 'ord_test_webhook',
+      quoteId: 'q_test_webhook',
+      status: FLASHNET_ORDER_STATUS.DELIVERING,
+      invoice: { id: 'inv-1', amountMsat: BigInt(1_000_000) },
+    }
+
+    const BASE_PAYLOAD: FlashnetWebhookPayload = {
+      event: 'order.completed',
+      timestamp: '1714000000000',
+      data: {
+        id: 'ord_test_webhook',
+        status: 'completed',
+        amountOut: '920000',
+        feeAmount: '10000',
+        error: { code: null, message: null },
+      },
+    }
+
+    it('order.completed — updates status to DELIVERED, sets actualOut, marks processedAt', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-1',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(BASE_ORDER)
+
+      await service.applyWebhookEvent(BASE_PAYLOAD)
+
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
+
+      // FlashnetOrder updated with DELIVERED status and actualOut.
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
+      expect(updateCall.data.actualOut.equals(new Prisma.Decimal('0.92'))).toBe(true)
+
+      // Webhook event marked as processed.
+      const whUpdate = prismaMock._txMock.flashnetWebhookEvent.update.mock.calls[0][0]
+      expect(whUpdate.data.processedAt).toBeInstanceOf(Date)
+    })
+
+    it('idempotent — second call with same (orderId, event, timestamp) is a no-op', async () => {
+      // Simulate already-processed event (processedAt is set).
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-1',
+        processedAt: new Date('2026-04-22T10:00:00Z'),
+      })
+
+      await service.applyWebhookEvent(BASE_PAYLOAD)
+
+      // FlashnetOrder.update must NOT have been called.
+      expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
+    })
+
+    it('unknown orderId — logs warning and marks event processed, does not update FlashnetOrder', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-2',
+        processedAt: null,
+      })
+      // No matching FlashnetOrder row.
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(null)
+
+      await service.applyWebhookEvent({ ...BASE_PAYLOAD, data: { ...BASE_PAYLOAD.data, id: 'ord_unknown' } })
+
+      expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
+      // Webhook event still marked processed to prevent repeated log spam.
+      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
+    })
+
+    it('stale transition (DELIVERED → FAILED) — does not throw, marks webhook processed, leaves order untouched', async () => {
+      // Out-of-order / post-terminal deliveries must not propagate as 5xx; if
+      // they did, Flashnet would retry indefinitely. Instead we mark the
+      // webhook processed (stops retries) and log a warning.
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-3',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERED,
+      })
+
+      const warnSpy = jest.spyOn(service['logger'], 'warn')
+
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        event: 'order.failed',
+        data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } },
+      })
+
+      expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
+      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ignored (stale)'))
+    })
+
+    it('idempotent redelivery (DELIVERING → DELIVERING) — no order update, marks webhook processed', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-3b',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        event: 'order.delivering',
+        data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } },
+      })
+
+      expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
+      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
+    })
+
+    it('DELIVERING → FAILED logs refund_case_needed warning', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-4',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      const warnSpy = jest.spyOn(service['logger'], 'warn')
+
+      await service.applyWebhookEvent({ ...BASE_PAYLOAD, event: 'order.failed', data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } } })
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('refund case needed'))
+    })
+
+    // -------------------------------------------------------------------------
+    // PR6 new tests — fee refresh (replaces removed amount_reconciled tests)
+    // -------------------------------------------------------------------------
+
+    it('order.refunding from SWAPPING — advances status to REFUNDING and persists error fields', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-5a',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.SWAPPING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.refunding',
+        timestamp: '1714000001000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'refunding',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: 'slippage_exceeded', message: 'Pool moved past slippage tolerance' },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.REFUNDING)
+      expect(updateCall.data.errorCode).toBe('slippage_exceeded')
+      expect(updateCall.data.errorMessage).toBe('Pool moved past slippage tolerance')
+    })
+
+    it('order.completed with null amountOut — does not set actualOut', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-5b',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.completed',
+        timestamp: '1714000001500',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'completed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: null, message: null },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
+      expect(updateCall.data.actualOut).toBeUndefined()
+    })
+
+    // -------------------------------------------------------------------------
+    // PR6 new tests — concern #4: refund_case_needed log payload shape
+    // -------------------------------------------------------------------------
+
+    it('DELIVERING → FAILED — refund_case_needed log carries correct orderId, invoiceId, amountSats', async () => {
+      const DELIVERING_ORDER = {
+        id: 'fo-2',
+        invoiceId: 'inv-2',
+        orderId: 'ord_deliver_fail',
+        quoteId: 'q_deliver_fail',
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+        invoice: { id: 'inv-2', amountMsat: BigInt(2_000_000) }, // 2000 sats
+      }
+
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-7',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(DELIVERING_ORDER)
+
+      const warnSpy = jest.spyOn(service['logger'], 'warn')
+
+      await service.applyWebhookEvent({
+        event: 'order.failed',
+        timestamp: '1714000003000',
+        data: {
+          id: 'ord_deliver_fail',
+          status: 'failed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: null, message: null },
+        },
+      })
+
+      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
+      expect(msg).toContain('[ord_deliver_fail]')
+      expect(msg).toContain('DELIVERING->FAILED')
+      expect(msg).toContain('invoice=inv-2')
+      expect(msg).toContain('sats=2000') // Math.floor(2_000_000 / 1000)
+    })
+
+    it('DELIVERING → FAILED — refund_case_needed log sets amountSats to null when invoice is absent', async () => {
+      const ORDER_NO_INVOICE = {
+        id: 'fo-3',
+        invoiceId: 'inv-3',
+        orderId: 'ord_no_invoice',
+        quoteId: 'q_no_invoice',
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+        invoice: null, // invoice relation not loaded / null
+      }
+
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-8',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(ORDER_NO_INVOICE)
+
+      const warnSpy = jest.spyOn(service['logger'], 'warn')
+
+      await service.applyWebhookEvent({
+        event: 'order.failed',
+        timestamp: '1714000004000',
+        data: {
+          id: 'ord_no_invoice',
+          status: 'failed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: null, message: null },
+        },
+      })
+
+      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
+      expect(msg).toContain('sats=null')
+    })
+
+    // -------------------------------------------------------------------------
+    // PR6 new tests — order.refunded from REFUNDING
+    // -------------------------------------------------------------------------
+
+    it('order.refunded from REFUNDING → updates status to REFUNDED', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-9',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.REFUNDING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.refunded',
+        timestamp: '1714000005000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'refunded',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: 'slippage_exceeded', message: 'Slippage limit exceeded' },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.REFUNDED)
+      // error fields from data.error are persisted.
+      expect(updateCall.data.errorCode).toBe('slippage_exceeded')
+      expect(updateCall.data.errorMessage).toBe('Slippage limit exceeded')
+    })
+
+    // -------------------------------------------------------------------------
+    // PR6 new tests — errorCode / errorMessage persistence (lines 234-235)
+    // -------------------------------------------------------------------------
+
+    it('order.failed with both errorCode and errorMessage — persists both fields', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-10',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.failed',
+        timestamp: '1714000006000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'failed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: 'delivery_failed', message: 'Payment delivery failed' },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.errorCode).toBe('delivery_failed')
+      expect(updateCall.data.errorMessage).toBe('Payment delivery failed')
+    })
+
+    it('order.failed with errorCode but no errorMessage — persists errorCode, omits errorMessage', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-11',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.failed',
+        timestamp: '1714000007000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'failed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: 'target_unmet', message: null },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.errorCode).toBe('target_unmet')
+      expect(updateCall.data.errorMessage).toBeUndefined()
+    })
+
+    it('order.failed with errorMessage but no errorCode — persists errorMessage, omits errorCode', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-12',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.failed',
+        timestamp: '1714000008000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'failed',
+          amountOut: null,
+          feeAmount: '10000',
+          error: { code: null, message: 'Delivery node unreachable' },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.errorCode).toBeUndefined()
+      expect(updateCall.data.errorMessage).toBe('Delivery node unreachable')
+    })
+
+    it('order.completed with feeAmount — refreshes feeAmount alongside actualOut and DELIVERED status', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-13',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.completed',
+        timestamp: '1714000009000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'completed',
+          amountOut: '915000',
+          feeAmount: '10500',
+          error: { code: null, message: null },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
+      expect(updateCall.data.actualOut.equals(new Prisma.Decimal('0.915'))).toBe(true)
+      expect(updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0105'))).toBe(true)
+    })
+
+    it('order.swapping from CONFIRMING — advances status to SWAPPING and refreshes feeAmount', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-14',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.CONFIRMING,
+      })
+
+      await service.applyWebhookEvent({
+        event: 'order.swapping',
+        timestamp: '1714000010000',
+        data: {
+          id: 'ord_test_webhook',
+          status: 'swapping',
+          amountOut: null,
+          feeAmount: '9500',
+          error: { code: null, message: null },
+        },
+      })
+
+      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.SWAPPING)
+      expect(updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0095'))).toBe(true)
     })
   })
 })

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, NotFoundException, Query, BadRequestException, Logger } from '@nestjs/common'
+import { Controller, Get, Param, NotFoundException, Query, BadRequestException, BadGatewayException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createId } from '@paralleldrive/cuid2'
 import { LnurlService } from './lnurl.service'
@@ -7,6 +7,7 @@ import { LnurlPayMetadataDto } from '../common/lnurl-pay-metadata.dto'
 import { LnurlCallbackResponseDto } from '../common/lnurl-callback-response.dto'
 import { LNURL_CONSTANTS } from '../common/constants'
 import { getDomainFromBaseUrl } from '../common/utils'
+import type { SparkNetwork } from '../common/spark-address.utils'
 import { encodeSparkAddress } from '../common/spark-address.utils'
 import { SwapService } from '../swap/swap.service'
 
@@ -70,26 +71,20 @@ export class LnurlController {
     if (!lightningName) {
       throw new NotFoundException('Username not found')
     }
-    this.logger.log(`Found user with name: ${lightningName.username}`)
 
     // Validate Lightspark public key
     if (!lightningName.linkingPubKeyHex) {
       throw new BadRequestException('Lightspark public key not found')
     }
-    this.logger.log(`Lightspark public key: ${lightningName.linkingPubKeyHex}`)
 
     // Kill switch + per-user preference gate.
     const usdbEnabled = this.configService.get<string>('USDB_ENABLED')
     const defaultReceivingCurrency = lightningName.user.defaultReceivingCurrency
     const useUsdbRoute = usdbEnabled === 'true' && defaultReceivingCurrency === 'USDB'
 
-    this.logger.log({
-      event: 'lnurl.callback.routing',
-      username: lightningName.username,
-      usdbEnabled,
-      defaultReceivingCurrency,
-      useUsdbRoute,
-    })
+    this.logger.log(
+      `[${lightningName.username}] callback amount=${amountMsat}msat route=${useUsdbRoute ? 'usdb' : 'sats'}`,
+    )
 
     if (useUsdbRoute) {
       return this.handleUsdbCallback(lightningName, amountMsat)
@@ -97,13 +92,9 @@ export class LnurlController {
 
     // ---- SATS path (existing, unchanged) ----
     const sparkPubKeyHex = lightningName.linkingPubKeyHex
-
-    this.logger.log(`Creating invoice for amount: ${amountMsat} msat`)
     const domain = getDomainFromBaseUrl(this.configService.get<string>('PUBLIC_BASE_URL')!)
     const memo = comment ? `${lightningName.username}@${domain}: ${comment}` : `${lightningName.username}@${domain}`
-    this.logger.log(`Memo: ${memo}`)
     const invoiceResult = await this.lightsparkService.createInvoice(sparkPubKeyHex, amountMsat, memo)
-    this.logger.log(`Invoice created: ${invoiceResult.bolt11}`)
     await this.lnurlService.createInvoice({
       usernameId: lightningName.id,
       amountMsat: BigInt(amountMsat),
@@ -135,14 +126,10 @@ export class LnurlController {
     // Step 1: derive recipient Spark address
     let recipient: string
     try {
-      const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as import('../common/spark-address.utils').SparkNetwork
+      const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as SparkNetwork
       recipient = await encodeSparkAddress(lightningName.linkingPubKeyHex, sparkNetwork)
     } catch (err) {
-      this.logger.warn({
-        event: 'lnurl.callback.usdb.address_encode_failed',
-        username: lightningName.username,
-        error: String(err),
-      })
+      this.logger.warn(`[${lightningName.username}] spark address encode failed: ${String(err)}`)
       return { status: 'ERROR', reason: 'Invalid Spark address' }
     }
 
@@ -164,23 +151,15 @@ export class LnurlController {
       bolt11 = result.bolt11
     } catch (err: any) {
       // No DB write happened — nothing to clean up.
-      this.logger.warn({
-        event: 'lnurl.callback.usdb.flashnet_error',
-        idempotencyKey,
-        error: String(err),
-      })
-
       const code: string =
-        (err?.response as any)?.code ??
-        (typeof err?.message === 'string' ? err.message : 'service_unavailable')
+        err instanceof BadGatewayException
+          ? ((err.getResponse() as Record<string, unknown>)?.code as string | undefined) ?? err.message
+          : (typeof err?.message === 'string' ? err.message : 'service_unavailable')
+      this.logger.warn(`[${idempotencyKey}] flashnet error: ${code}`)
       return { status: 'ERROR', reason: code }
     }
 
-    this.logger.log({
-      event: 'lnurl.callback.usdb.success',
-      idempotencyKey,
-      username: lightningName.username,
-    })
+    this.logger.log(`[${lightningName.username}] usdb onramp ok (key=${idempotencyKey})`)
 
     return { pr: bolt11, routes: [] }
   }
