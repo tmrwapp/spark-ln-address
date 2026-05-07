@@ -219,6 +219,9 @@ describe('LnurlController', () => {
       expect(typeof callArg.idempotencyKey).toBe('string')
       expect(callArg.idempotencyKey.length).toBeGreaterThan(0)
 
+      // Happy USDB must NOT trigger the sats fallback.
+      expect(lightsparkService.createInvoice).not.toHaveBeenCalled()
+
       expect(result).toEqual({ pr: MOCK_BOLT11, routes: [] })
     })
 
@@ -274,47 +277,90 @@ describe('LnurlController', () => {
   // handleLnurlCallback — USDB error paths
   // -------------------------------------------------------------------------
 
-  describe('handleLnurlCallback — USDB error paths', () => {
-    it('encodeSparkAddress failure → returns { status: ERROR, reason: "Invalid Spark address" }', async () => {
+  describe('handleLnurlCallback — USDB fallback to sats', () => {
+    it('encodeSparkAddress failure → falls back to sats invoice', async () => {
       encodeSparkAddressSpy.mockRejectedValueOnce(new Error('bad pubkey'))
+      const warnSpy = jest.spyOn(controller['logger'], 'warn')
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
-      expect(result).toEqual({ status: 'ERROR', reason: 'Invalid Spark address' })
-      // No invoice created, no swap attempted
-      expect(lnurlService.createInvoice).not.toHaveBeenCalled()
+      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(lnurlService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usdb unavailable'))
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('using sats'))
+    })
+
+    it('SwapService.initiateOnramp throws BadGatewayException → falls back to sats; warn includes the code', async () => {
+      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
+      swapService.initiateOnramp.mockRejectedValueOnce(apiError)
+      const warnSpy = jest.spyOn(controller['logger'], 'warn')
+
+      const result = await controller.handleLnurlCallback('alice', '1000')
+
+      expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(lnurlService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unsupported_route'))
+    })
+
+    it('SwapService.initiateOnramp throws plain Error → falls back to sats; warn includes the message', async () => {
+      const plainError = new Error('service_unavailable')
+      swapService.initiateOnramp.mockRejectedValueOnce(plainError)
+      const warnSpy = jest.spyOn(controller['logger'], 'warn')
+
+      const result = await controller.handleLnurlCallback('alice', '1000')
+
+      expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('service_unavailable'))
+    })
+
+    it('SwapService.initiateOnramp throws non-Error object → falls back to sats; warn shows "unknown"', async () => {
+      // Non-Error throw with no message or response.code
+      swapService.initiateOnramp.mockRejectedValueOnce({ code: 42 })
+      const warnSpy = jest.spyOn(controller['logger'], 'warn')
+
+      const result = await controller.handleLnurlCallback('alice', '1000')
+
+      expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
+      expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown'))
+    })
+  })
+
+  describe('handleLnurlCallback — LUD-06 error response on issuance failure', () => {
+    it('USDB throws AND sats fallback throws → returns { status: ERROR, reason }', async () => {
+      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
+      swapService.initiateOnramp.mockRejectedValueOnce(apiError)
+      lightsparkService.createInvoice.mockRejectedValueOnce(new Error('lightspark down'))
+      const errorSpy = jest.spyOn(controller['logger'], 'error')
+
+      const result = await controller.handleLnurlCallback('alice', '1000')
+
+      expect(result).toEqual({ status: 'ERROR', reason: 'lightspark down' })
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sats issuance failed'))
+    })
+
+    it('SATS-preference user with lightspark failure → returns { status: ERROR, reason }', async () => {
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(MOCK_LIGHTNING_NAME_SATS)
+      lightsparkService.createInvoice.mockRejectedValueOnce(new Error('lightspark down'))
+
+      const result = await controller.handleLnurlCallback('alice', '1000')
+
+      expect(result).toEqual({ status: 'ERROR', reason: 'lightspark down' })
+      // No Flashnet attempt for a SATS-preference user
       expect(swapService.initiateOnramp).not.toHaveBeenCalled()
     })
 
-    it('SwapService.initiateOnramp throws BadGatewayException with code → returns { status: ERROR, reason: code }, no DB cleanup', async () => {
-      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
-      swapService.initiateOnramp.mockRejectedValueOnce(apiError)
+    it('non-Error throw from lightspark → returns { status: ERROR, reason: "unknown" }', async () => {
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(MOCK_LIGHTNING_NAME_SATS)
+      lightsparkService.createInvoice.mockRejectedValueOnce({ broken: true })
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
-      expect(result).toEqual({ status: 'ERROR', reason: 'unsupported_route' })
-      // No invoice was created — nothing to clean up
-      expect(lnurlService.createInvoice).not.toHaveBeenCalled()
-    })
-
-    it('SwapService.initiateOnramp throws with err.message → returns { status: ERROR, reason: message }', async () => {
-      const plainError = new Error('service_unavailable')
-      swapService.initiateOnramp.mockRejectedValueOnce(plainError)
-
-      const result = await controller.handleLnurlCallback('alice', '1000')
-
-      expect(result).toEqual({ status: 'ERROR', reason: 'service_unavailable' })
-      expect(lnurlService.createInvoice).not.toHaveBeenCalled()
-    })
-
-    it('SwapService.initiateOnramp throws non-Error object → returns { status: ERROR, reason: "service_unavailable" }', async () => {
-      // Non-Error throw with no message or response.code
-      swapService.initiateOnramp.mockRejectedValueOnce({ code: 42 })
-
-      const result = await controller.handleLnurlCallback('alice', '1000')
-
-      expect(result).toEqual({ status: 'ERROR', reason: 'service_unavailable' })
-      expect(lnurlService.createInvoice).not.toHaveBeenCalled()
+      expect(result).toEqual({ status: 'ERROR', reason: 'unknown' })
     })
   })
 })
