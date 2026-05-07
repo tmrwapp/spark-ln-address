@@ -83,12 +83,14 @@ export class LnurlController {
     const useUsdbRoute = usdbEnabled === 'true' && defaultReceivingCurrency === 'USDB'
 
     this.logger.log(
-      `[${lightningName.username}] callback amount=${amountMsat}msat route=${useUsdbRoute ? 'usdb' : 'sats'}`,
+      `[${lightningName.username}] callback amount=${amountMsat}, msat route=${useUsdbRoute ? 'usdb' : 'sats'}`,
     )
 
     if (useUsdbRoute) {
+      this.logger.log(`[${lightningName.username}] using usdb route`)
       return this.handleUsdbCallback(lightningName, amountMsat)
     }
+    this.logger.log(`[${lightningName.username}] using sats route`)
 
     // ---- SATS path (existing, unchanged) ----
     const sparkPubKeyHex = lightningName.linkingPubKeyHex
