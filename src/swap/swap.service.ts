@@ -4,6 +4,7 @@ import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { FlashnetService } from '../flashnet/flashnet.service'
 import { FlashnetMockService } from '../flashnet/flashnet.mock'
 import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
+import { RefundCaseService } from '../refund-case/refund-case.service'
 import { usdbSmallestUnitsToDecimal } from './usdb-units'
 import { classifyTransition, mapEventToStatus } from './swap-state-machine'
 import { FLASHNET_ORDER_STATUS } from './flashnet-order-status'
@@ -36,6 +37,7 @@ export class SwapService {
     private readonly prisma: PrismaService,
     @Inject(FLASHNET_SERVICE)
     private readonly flashnet: FlashnetService | FlashnetMockService,
+    private readonly refundCaseService: RefundCaseService,
   ) {}
 
   /**
@@ -55,6 +57,15 @@ export class SwapService {
     const { idempotencyKey, amountSats, amountMsat, recipientSparkAddress, lightningNameId } = params
 
     // Call Flashnet — throws BadGatewayException / ServiceUnavailableException on error.
+    //
+    // `refundAddress`: undocumented on `/onramp` per Flashnet's published OpenAPI,
+    // but pure Lightning provides no protocol mechanism to refund a settled HTLC
+    // back to the original payer (BOLT 11 is unidirectional; payee learns nothing
+    // about payer node identity). Hold-invoice cancel covers pre-settle failures;
+    // for post-settle failures Flashnet has no LN return path and almost certainly
+    // uses this Spark address as the refund destination. Keep sending it until
+    // Flashnet confirms behavior in writing — cost is zero, omission risks stuck
+    // funds on a delivery-leg failure.
     const response = await this.flashnet.createOnrampOrder(
       {
         destinationChain: 'spark',
@@ -148,8 +159,13 @@ export class SwapService {
    *               processed (so Flashnet stops retrying), log warn, do not
    *               mutate the order. Never throws back to the controller, so
    *               the response stays 204 and the retry loop is broken.
-   * - On DELIVERING → FAILED: logs a structured warning for the RefundCase
-   *   integration point (PR8 will wire the actual createRefundCase call).
+   * - On DELIVERING → FAILED: opens a RefundCase via RefundCaseService inside
+   *   the same transaction. Defensive backstop only — Flashnet's documented
+   *   behavior is to auto-refund failed orders (sats unwind via hold-invoice
+   *   cancel pre-settle, or refund to the Spark `refundAddress` post-settle).
+   *   This case fires only if delivery terminally fails AND Flashnet routes
+   *   the failure to `order.failed` rather than `order.refunding` — a path
+   *   the docs allow but don't commit to. Keep as a safety net.
    */
   async applyWebhookEvent(payload: FlashnetWebhookPayload): Promise<void> {
     const { event, timestamp } = payload
@@ -253,15 +269,22 @@ export class SwapService {
         data: { processedAt: new Date() },
       })
 
-      // DELIVERING → FAILED: refund-case integration point.
-      // TODO(PR8): replace this log with RefundCaseService.createRefundCase() once
-      // the refund-case module is merged from the feat/refund-case branch.
+      // DELIVERING → FAILED: open a RefundCase for ops to resolve out-of-band.
+      // See applyWebhookEvent doc comment for the rationale (defensive backstop).
+      // Idempotent on RefundCase.invoiceId @unique; runs inside the surrounding
+      // tx so a crash mid-flow can't leave the order updated without the case.
       if (event === 'order.failed' && flashnetOrder.status === FLASHNET_ORDER_STATUS.DELIVERING) {
         const amountSats = flashnetOrder.invoice?.amountMsat
           ? Math.floor(Number(flashnetOrder.invoice.amountMsat) / 1000)
-          : null
-        this.logger.warn(
-          `[${orderId}] DELIVERING->FAILED refund case needed (invoice=${flashnetOrder.invoiceId} sats=${amountSats})`,
+          : 0
+        const reason = `DELIVERING_FAILED: ${payload.data.error?.code ?? 'no_code'} | ${payload.data.error?.message ?? 'no_message'}`
+        await this.refundCaseService.createRefundCase(
+          {
+            invoiceId: flashnetOrder.invoiceId,
+            amountSats,
+            reason,
+          },
+          tx,
         )
       }
 

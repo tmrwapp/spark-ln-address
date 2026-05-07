@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
+import { RefundCaseService } from '../refund-case/refund-case.service'
 import { Prisma } from '@prisma/client'
 import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
 import { FLASHNET_ORDER_STATUS } from './flashnet-order-status'
@@ -84,16 +85,21 @@ describe('SwapService', () => {
   let service: SwapService
   let flashnetMock: ReturnType<typeof makeFlashnetMock>
   let prismaMock: ReturnType<typeof makePrismaMock>
+  let refundCaseServiceMock: { createRefundCase: jest.Mock }
 
   beforeEach(async () => {
     flashnetMock = makeFlashnetMock()
     prismaMock = makePrismaMock()
+    refundCaseServiceMock = {
+      createRefundCase: jest.fn().mockResolvedValue({ id: 'rc-mock', status: 'OPEN' }),
+    }
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SwapService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: FLASHNET_SERVICE, useValue: flashnetMock },
+        { provide: RefundCaseService, useValue: refundCaseServiceMock },
       ],
     }).compile()
 
@@ -413,7 +419,7 @@ describe('SwapService', () => {
       expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
     })
 
-    it('DELIVERING → FAILED logs refund_case_needed warning', async () => {
+    it('DELIVERING → FAILED — calls RefundCaseService.createRefundCase with tx', async () => {
       prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
         id: 'wh-4',
         processedAt: null,
@@ -423,11 +429,56 @@ describe('SwapService', () => {
         status: FLASHNET_ORDER_STATUS.DELIVERING,
       })
 
-      const warnSpy = jest.spyOn(service['logger'], 'warn')
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        event: 'order.failed',
+        data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } },
+      })
 
-      await service.applyWebhookEvent({ ...BASE_PAYLOAD, event: 'order.failed', data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } } })
+      expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledTimes(1)
+      // Second arg must be the tx client so the case write is atomic with the order update.
+      expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledWith(
+        expect.any(Object),
+        prismaMock._txMock,
+      )
+    })
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('refund case needed'))
+    it('non-DELIVERING failure (e.g. SWAPPING → FAILED) — does NOT create a refund case', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-4b',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.SWAPPING,
+      })
+
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        event: 'order.failed',
+        data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } },
+      })
+
+      expect(refundCaseServiceMock.createRefundCase).not.toHaveBeenCalled()
+    })
+
+    it('DELIVERING → DELIVERED (happy path) — does NOT create a refund case', async () => {
+      prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
+        id: 'wh-4c',
+        processedAt: null,
+      })
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+        ...BASE_ORDER,
+        status: FLASHNET_ORDER_STATUS.DELIVERING,
+      })
+
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        event: 'order.completed',
+        data: { ...BASE_PAYLOAD.data, amountOut: '1000000', error: { code: null, message: null } },
+      })
+
+      expect(refundCaseServiceMock.createRefundCase).not.toHaveBeenCalled()
     })
 
     // -------------------------------------------------------------------------
@@ -490,10 +541,10 @@ describe('SwapService', () => {
     })
 
     // -------------------------------------------------------------------------
-    // PR6 new tests — concern #4: refund_case_needed log payload shape
+    // PR8 — refund-case integration param shape
     // -------------------------------------------------------------------------
 
-    it('DELIVERING → FAILED — refund_case_needed log carries correct orderId, invoiceId, amountSats', async () => {
+    it('DELIVERING → FAILED — passes invoiceId, amountSats, and structured reason to createRefundCase', async () => {
       const DELIVERING_ORDER = {
         id: 'fo-2',
         invoiceId: 'inv-2',
@@ -509,8 +560,6 @@ describe('SwapService', () => {
       })
       prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(DELIVERING_ORDER)
 
-      const warnSpy = jest.spyOn(service['logger'], 'warn')
-
       await service.applyWebhookEvent({
         event: 'order.failed',
         timestamp: '1714000003000',
@@ -519,40 +568,41 @@ describe('SwapService', () => {
           status: 'failed',
           amountOut: null,
           feeAmount: '10000',
-          error: { code: null, message: null },
+          error: { code: 'delivery_aborted', message: 'destination unreachable' },
         },
       })
 
-      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
-      expect(msg).toContain('[ord_deliver_fail]')
-      expect(msg).toContain('DELIVERING->FAILED')
-      expect(msg).toContain('invoice=inv-2')
-      expect(msg).toContain('sats=2000') // Math.floor(2_000_000 / 1000)
+      expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledWith(
+        {
+          invoiceId: 'inv-2',
+          amountSats: 2000,
+          reason: 'DELIVERING_FAILED: delivery_aborted | destination unreachable',
+        },
+        prismaMock._txMock,
+      )
     })
 
-    it('DELIVERING → FAILED — refund_case_needed log sets amountSats to null when invoice is absent', async () => {
-      const ORDER_NO_INVOICE = {
+    it('DELIVERING → FAILED with null error fields — uses no_code/no_message placeholders', async () => {
+      const DELIVERING_ORDER = {
         id: 'fo-3',
         invoiceId: 'inv-3',
-        orderId: 'ord_no_invoice',
-        quoteId: 'q_no_invoice',
+        orderId: 'ord_no_err',
+        quoteId: 'q_no_err',
         status: FLASHNET_ORDER_STATUS.DELIVERING,
-        invoice: null, // invoice relation not loaded / null
+        invoice: { id: 'inv-3', amountMsat: BigInt(2_000_000) },
       }
 
       prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
         id: 'wh-8',
         processedAt: null,
       })
-      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(ORDER_NO_INVOICE)
-
-      const warnSpy = jest.spyOn(service['logger'], 'warn')
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(DELIVERING_ORDER)
 
       await service.applyWebhookEvent({
         event: 'order.failed',
         timestamp: '1714000004000',
         data: {
-          id: 'ord_no_invoice',
+          id: 'ord_no_err',
           status: 'failed',
           amountOut: null,
           feeAmount: '10000',
@@ -560,8 +610,12 @@ describe('SwapService', () => {
         },
       })
 
-      const msg = warnSpy.mock.calls.find((c) => String(c[0]).includes('refund case needed'))?.[0] as string
-      expect(msg).toContain('sats=null')
+      expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: 'DELIVERING_FAILED: no_code | no_message',
+        }),
+        prismaMock._txMock,
+      )
     })
 
     // -------------------------------------------------------------------------
