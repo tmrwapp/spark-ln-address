@@ -7,9 +7,10 @@ import { AuthModule } from './auth/auth.module'
 import { QueryModule } from 'src/query/query.module'
 import { CurrencyPreferenceModule } from './currency-preference/currency-preference.module'
 import { SwapModule } from './swap/swap.module'
+import { RefundCaseModule } from './refund-case/refund-case.module'
 
 @Module({
-  imports: [ConfigModule, LnurlModule, AuthModule, QueryModule, CurrencyPreferenceModule, SwapModule],
+  imports: [ConfigModule, LnurlModule, AuthModule, QueryModule, CurrencyPreferenceModule, SwapModule, RefundCaseModule],
   controllers: [AppController],
   providers: [PrismaService],
 })
