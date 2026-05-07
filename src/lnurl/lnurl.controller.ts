@@ -11,6 +11,23 @@ import type { SparkNetwork } from '../common/spark-address.utils'
 import { encodeSparkAddress } from '../common/spark-address.utils'
 import { SwapService } from '../swap/swap.service'
 
+/**
+ * Extracts a short reason string from an unknown error for log/response use.
+ * Prefers Flashnet's `code` (BadGatewayException response body), falls back
+ * to `err.message`, and finally to `'unknown'` for non-Error throws.
+ */
+function extractErrorReason(err: unknown): string {
+  if (err instanceof BadGatewayException) {
+    const code = (err.getResponse() as Record<string, unknown>)?.code
+    if (typeof code === 'string') return code
+    return err.message
+  }
+  if (err && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message
+  }
+  return 'unknown'
+}
+
 @Controller()
 export class LnurlController {
   private readonly logger = new Logger(LnurlController.name);
@@ -86,83 +103,85 @@ export class LnurlController {
       `[${lightningName.username}] callback amount=${amountMsat}, msat route=${useUsdbRoute ? 'usdb' : 'sats'}`,
     )
 
+    // USDB is best-effort. If anything in the USDB branch fails (most often a
+    // sub-Flashnet-minimum amount), fall through to the sats path so the
+    // payment still goes through.
     if (useUsdbRoute) {
-      this.logger.log(`[${lightningName.username}] using usdb route`)
-      return this.handleUsdbCallback(lightningName, amountMsat)
+      try {
+        this.logger.log(`[${lightningName.username}] using usdb route`)
+        return await this.handleUsdbCallback(lightningName, amountMsat)
+      } catch (err: any) {
+        const reason = extractErrorReason(err)
+        this.logger.warn(`[${lightningName.username}] usdb unavailable (${reason}), using sats`)
+      }
     }
     this.logger.log(`[${lightningName.username}] using sats route`)
 
-    // ---- SATS path (existing, unchanged) ----
-    const sparkPubKeyHex = lightningName.linkingPubKeyHex
+    // LUD-06: callback errors must be returned as `{ status: 'ERROR', reason }`
+    // with HTTP 200, not as a thrown exception (which would surface as 5xx and
+    // confuse compliant wallets). Catch any sats issuance failure here.
+    try {
+      return await this.issueSatsBolt11(lightningName, amountMsat, comment)
+    } catch (err: any) {
+      const reason = extractErrorReason(err)
+      this.logger.error(`[${lightningName.username}] sats issuance failed: ${reason}`)
+      return { status: 'ERROR', reason }
+    }
+  }
+
+  /**
+   * USDB onramp path. Throws on any failure (encode failure, Flashnet error,
+   * etc.) so the caller in handleLnurlCallback can fall back to the sats path.
+   * On success: returns the BOLT11 invoice and persists Invoice + FlashnetOrder
+   * in a single transaction inside SwapService.
+   */
+  private async handleUsdbCallback(
+    lightningName: { id: string; linkingPubKeyHex: string; username: string },
+    amountMsat: number,
+  ): Promise<LnurlCallbackResponseDto> {
+    const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as SparkNetwork
+    const recipient = await encodeSparkAddress(lightningName.linkingPubKeyHex, sparkNetwork)
+
+    const amountSats = Math.floor(amountMsat / 1000)
+    const idempotencyKey = createId()
+
+    const result = await this.swapService.initiateOnramp({
+      idempotencyKey,
+      lightningNameId: lightningName.id,
+      amountMsat,
+      amountSats,
+      recipientSparkAddress: recipient,
+    })
+
+    this.logger.log(`[${lightningName.username}] usdb onramp ok (key=${idempotencyKey})`)
+
+    return { pr: result.bolt11, routes: [] }
+  }
+
+  /**
+   * Issues a Lightning invoice via Lightspark and persists it. Used by the
+   * default sats branch and as the fallback when the USDB branch throws.
+   */
+  private async issueSatsBolt11(
+    lightningName: { id: string; linkingPubKeyHex: string; username: string },
+    amountMsat: number,
+    comment?: string,
+  ): Promise<LnurlCallbackResponseDto> {
     const domain = getDomainFromBaseUrl(this.configService.get<string>('PUBLIC_BASE_URL')!)
-    const memo = comment ? `${lightningName.username}@${domain}: ${comment}` : `${lightningName.username}@${domain}`
-    const invoiceResult = await this.lightsparkService.createInvoice(sparkPubKeyHex, amountMsat, memo)
+    const memo = comment
+      ? `${lightningName.username}@${domain}: ${comment}`
+      : `${lightningName.username}@${domain}`
+    const invoiceResult = await this.lightsparkService.createInvoice(
+      lightningName.linkingPubKeyHex,
+      amountMsat,
+      memo,
+    )
     await this.lnurlService.createInvoice({
       usernameId: lightningName.id,
       amountMsat: BigInt(amountMsat),
       bolt11: invoiceResult.bolt11,
       expiresAt: invoiceResult.expiresAt,
     })
-
-    return {
-      pr: invoiceResult.bolt11,
-      routes: [],
-    }
-  }
-
-  /**
-   * USDB onramp path:
-   * 1. Encode the user's Spark address from their linking pubkey.
-   * 2. Pre-generate a cuid as idempotency key (also becomes the Invoice id).
-   * 3. Call SwapService.initiateOnramp, which calls Flashnet then — on success —
-   *    INSERTs both Invoice and FlashnetOrder in a single transaction.
-   * 4. Return the BOLT11 to the payer.
-   *
-   * On Flashnet error: SwapService throws before any DB write; return LNURL error.
-   * No cleanup needed — nothing was persisted.
-   */
-  private async handleUsdbCallback(
-    lightningName: { id: string; linkingPubKeyHex: string; username: string },
-    amountMsat: number,
-  ): Promise<LnurlCallbackResponseDto | { status: 'ERROR'; reason: string }> {
-    // Step 1: derive recipient Spark address
-    let recipient: string
-    try {
-      const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as SparkNetwork
-      recipient = await encodeSparkAddress(lightningName.linkingPubKeyHex, sparkNetwork)
-    } catch (err) {
-      this.logger.warn(`[${lightningName.username}] spark address encode failed: ${String(err)}`)
-      return { status: 'ERROR', reason: 'Invalid Spark address' }
-    }
-
-    const amountSats = Math.floor(amountMsat / 1000)
-
-    // Step 2: pre-generate idempotency key (doubles as Invoice id)
-    const idempotencyKey = createId()
-
-    // Step 3: call Flashnet via SwapService — persists Invoice + FlashnetOrder on success
-    let bolt11: string
-    try {
-      const result = await this.swapService.initiateOnramp({
-        idempotencyKey,
-        lightningNameId: lightningName.id,
-        amountMsat,
-        amountSats,
-        recipientSparkAddress: recipient,
-      })
-      bolt11 = result.bolt11
-    } catch (err: any) {
-      // No DB write happened — nothing to clean up.
-      const code: string =
-        err instanceof BadGatewayException
-          ? ((err.getResponse() as Record<string, unknown>)?.code as string | undefined) ?? err.message
-          : (typeof err?.message === 'string' ? err.message : 'service_unavailable')
-      this.logger.warn(`[${idempotencyKey}] flashnet error: ${code}`)
-      return { status: 'ERROR', reason: code }
-    }
-
-    this.logger.log(`[${lightningName.username}] usdb onramp ok (key=${idempotencyKey})`)
-
-    return { pr: bolt11, routes: [] }
+    return { pr: invoiceResult.bolt11, routes: [] }
   }
 }
