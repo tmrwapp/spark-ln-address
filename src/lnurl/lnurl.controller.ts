@@ -55,6 +55,11 @@ export class LnurlController {
 
     const domain = getDomainFromBaseUrl(publicBaseUrl)
     const callback = `${publicBaseUrl}/lnurl/callback/${lightningName.username}`
+    const identifier = `${lightningName.username}@${domain}`
+    const metadata = JSON.stringify([
+      ['text/plain', identifier],
+      ['text/identifier', identifier],
+    ])
 
     return {
       status: 'OK',
@@ -62,7 +67,7 @@ export class LnurlController {
       callback,
       minSendable: LNURL_CONSTANTS.MIN_SENDABLE_MSAT,
       maxSendable: LNURL_CONSTANTS.MAX_SENDABLE_MSAT,
-      metadata: [[ 'text/plain', `${lightningName.username}@${domain}` ]],
+      metadata,
       commentAllowed: LNURL_CONSTANTS.COMMENT_ALLOWED,
     }
   }
