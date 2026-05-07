@@ -130,6 +130,33 @@ describe('LnurlController', () => {
       })
     })
 
+    it('metadata is a JSON-encoded string containing text/plain and text/identifier entries (LUD-06 / LUD-16)', async () => {
+      lnurlService.findActiveLightningName.mockResolvedValueOnce({
+        ...MOCK_LIGHTNING_NAME_USDB,
+        username: 'alice',
+      })
+
+      const result = await controller.getLnurlPayMetadata('alice')
+
+      // LUD-06: metadata must be a string so sha256(metadata) binds to the BOLT11 description_hash
+      expect(typeof result.metadata).toBe('string')
+
+      // Must be valid JSON that parses to an array of arrays
+      const parsed = JSON.parse(result.metadata)
+      expect(Array.isArray(parsed)).toBe(true)
+
+      // LUD-16: must carry both text/plain and text/identifier entries
+      const plain = parsed.find(([type]: string[]) => type === 'text/plain')
+      const identifier = parsed.find(([type]: string[]) => type === 'text/identifier')
+
+      expect(plain).toBeDefined()
+      expect(identifier).toBeDefined()
+
+      // Both entries must carry the <username>@<domain> address
+      expect(plain[1]).toBe('alice@pay.example.com')
+      expect(identifier[1]).toBe('alice@pay.example.com')
+    })
+
     it('throws NotFoundException for unknown username', async () => {
       lnurlService.findActiveLightningName.mockResolvedValueOnce(null)
 
