@@ -1,0 +1,1190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lightning Username Change — Specification</title>
+<style>
+  :root {
+    --cyan: #00BBFF;
+    --cyan-soft: #E5F7FF;
+    --ink: #111111;
+    --ink-2: #3A3F45;
+    --muted: #6B7280;
+    --line: #E6E9EC;
+    --bg: #F7F8FA;
+    --card: #FFFFFF;
+    --green: #0E9F6E;
+    --green-soft: #E7F6F0;
+    --amber: #B45309;
+    --amber-soft: #FEF3E2;
+    --red: #C81E1E;
+    --red-soft: #FDECEC;
+    --radius: 26px;
+    --radius-sm: 14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 40px 24px 96px;
+  }
+
+  /* ---------- Header ---------- */
+
+  header.hero {
+    background: var(--ink);
+    color: #fff;
+    border-radius: var(--radius);
+    padding: 40px 40px 34px;
+    margin-bottom: 28px;
+  }
+
+  header.hero .eyebrow {
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    font-weight: 700;
+    margin: 0 0 12px;
+  }
+
+  header.hero h1 {
+    margin: 0 0 14px;
+    font-size: 38px;
+    line-height: 1.15;
+    letter-spacing: -.02em;
+    font-weight: 800;
+  }
+
+  header.hero p.lede {
+    margin: 0 0 24px;
+    font-size: 17px;
+    color: #C9CED4;
+    max-width: 68ch;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 999px;
+    padding: 7px 15px;
+    font-size: 13px;
+    font-weight: 600;
+    background: rgba(255,255,255,.09);
+    color: #E8EBEE;
+    border: 1px solid rgba(255,255,255,.14);
+  }
+
+  .chip.accent {
+    background: var(--cyan);
+    color: #05202B;
+    border-color: var(--cyan);
+  }
+
+  /* ---------- TOC ---------- */
+
+  nav.toc {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 26px;
+    margin-bottom: 32px;
+  }
+
+  nav.toc h2 {
+    margin: 0 0 14px;
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  nav.toc ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 8px 26px;
+    counter-reset: toc;
+  }
+
+  nav.toc li { counter-increment: toc; }
+
+  nav.toc a {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 14.5px;
+    display: block;
+    padding: 3px 0;
+  }
+
+  nav.toc a::before {
+    content: counter(toc) ".";
+    color: var(--cyan);
+    font-weight: 700;
+    margin-right: 8px;
+  }
+
+  nav.toc a:hover { color: var(--cyan); }
+
+  /* ---------- Sections ---------- */
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 32px 36px 34px;
+    margin-bottom: 22px;
+  }
+
+  section > h2 {
+    margin: 0 0 6px;
+    font-size: 25px;
+    letter-spacing: -.015em;
+    font-weight: 800;
+  }
+
+  section > p.sub {
+    margin: 0 0 24px;
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  h3 {
+    margin: 30px 0 10px;
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  h3:first-of-type { margin-top: 8px; }
+
+  p { margin: 0 0 14px; }
+
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+
+  li { margin-bottom: 7px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: .875em;
+    background: #F1F3F5;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1.5px 6px;
+    color: #0B4F66;
+  }
+
+  a { color: #0077A8; }
+
+  /* ---------- Rule cards ---------- */
+
+  .rules {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+    margin: 4px 0 8px;
+  }
+
+  .rule {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 20px 22px;
+    background: #FBFCFD;
+  }
+
+  .rule .k {
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .rule .v {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    margin-bottom: 8px;
+    color: var(--ink);
+  }
+
+  .rule .d {
+    font-size: 14px;
+    color: var(--ink-2);
+    line-height: 1.5;
+  }
+
+  .rule.hi {
+    background: var(--cyan-soft);
+    border-color: #A9E4FB;
+  }
+
+  /* ---------- Tables ---------- */
+
+  .tbl-wrap { overflow-x: auto; margin: 6px 0 18px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+    min-width: 560px;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  th {
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    border-bottom: 2px solid var(--line);
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  td.mono, th.mono { font-family: var(--mono); font-size: 13px; }
+
+  /* ---------- Badges ---------- */
+
+  .badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 3px 11px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .badge.ok    { background: var(--green-soft); color: var(--green); }
+  .badge.warn  { background: var(--amber-soft); color: var(--amber); }
+  .badge.bad   { background: var(--red-soft);   color: var(--red); }
+  .badge.info  { background: var(--cyan-soft);  color: #026A94; }
+  .badge.grey  { background: #EEF0F2;           color: var(--muted); }
+
+  /* ---------- Callouts ---------- */
+
+  .note {
+    border-left: 4px solid var(--cyan);
+    background: #F4FBFE;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 16px 20px;
+    margin: 18px 0;
+    font-size: 15px;
+  }
+
+  .note.warn { border-left-color: #F0A93B; background: #FFFBF3; }
+  .note.bad  { border-left-color: #E45B5B; background: #FFF6F6; }
+
+  .note .t {
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    color: var(--ink);
+  }
+
+  /* ---------- Code blocks ---------- */
+
+  pre {
+    background: #101418;
+    color: #D8E1E8;
+    border-radius: var(--radius-sm);
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.62;
+    margin: 6px 0 18px;
+  }
+
+  pre .c  { color: #6C7A85; }          /* comment */
+  pre .add { color: #7EE0A6; }         /* added */
+  pre .del { color: #F09A9A; }         /* removed */
+  pre .kw { color: #6FD3FF; }          /* keyword */
+  pre .st { color: #F5C97B; }          /* string */
+
+  /* ---------- Flow ---------- */
+
+  .flow {
+    display: grid;
+    gap: 0;
+    margin: 8px 0 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    background: #FBFCFD;
+  }
+
+  .step:last-child { border-bottom: none; }
+
+  .step .n {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: #fff;
+    font-weight: 800;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .step .body strong { display: block; margin-bottom: 3px; }
+  .step .body span { font-size: 14px; color: var(--ink-2); }
+
+  /* ---------- Scenario walkthrough ---------- */
+
+  .timeline { margin: 8px 0 6px; padding: 0; list-style: none; }
+
+  .timeline li {
+    position: relative;
+    padding: 0 0 20px 28px;
+    border-left: 2px solid var(--line);
+    margin: 0;
+  }
+
+  .timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+
+  .timeline li::before {
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: 5px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--cyan);
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px var(--line);
+  }
+
+  .timeline .act { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .timeline .state { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+
+  /* ---------- Open questions ---------- */
+
+  .q {
+    border: 1px solid var(--line);
+    border-left: 4px solid #F0A93B;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    background: #FFFDF8;
+  }
+
+  .q .qh { font-weight: 800; margin-bottom: 5px; }
+  .q .qb { font-size: 14.5px; color: var(--ink-2); }
+
+  footer.end {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 30px 0 0;
+  }
+
+  @media (max-width: 640px) {
+    header.hero { padding: 30px 24px 26px; }
+    header.hero h1 { font-size: 29px; }
+    section { padding: 26px 22px 28px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <p class="eyebrow">spark-ln-address &middot; Specification</p>
+  <h1>Lightning Username Change</h1>
+  <p class="lede">
+    Let a user change the <code style="background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#9FE6FF">name</code>
+    part of their <code style="background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#9FE6FF">name@guap.to</code>
+    Lightning address, retiring the previous name permanently and allowing an unlimited switch back to any name
+    the user has previously owned.
+  </p>
+  <div class="meta-row">
+    <span class="chip accent">Status: ready to build</span>
+    <span class="chip">Repo: spark-ln-address @ <code style="background:none;border:none;color:inherit;padding:0">develop</code></span>
+    <span class="chip">Baseline: 3657069</span>
+    <span class="chip">Rules decided by: Ari</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#rules">Product rules</a></li>
+    <li><a href="#behaviour">Behaviour on change</a></li>
+    <li><a href="#scenario">Worked scenario</a></li>
+    <li><a href="#model">Data model</a></li>
+    <li><a href="#migration">Migration</a></li>
+    <li><a href="#api">API</a></li>
+    <li><a href="#logic">Change logic</a></li>
+    <li><a href="#security">Security</a></li>
+    <li><a href="#ops">Ops endpoint</a></li>
+    <li><a href="#app">Mobile app changes</a></li>
+    <li><a href="#limits">Accepted limitations</a></li>
+    <li><a href="#tests">Test plan</a></li>
+    <li><a href="#rollout">Rollout</a></li>
+    <li><a href="#open">Decisions &amp; open items</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<section id="rules">
+  <h2>1. Product rules</h2>
+  <p class="sub">Decided by Ari: mirror the Cash App <code>$cashtag</code> rules.</p>
+
+  <div class="rules">
+    <div class="rule hi">
+      <div class="k">Old name</div>
+      <div class="v">Retired forever</div>
+      <div class="d">The previous name is never released back to the pool. No other user can ever claim it, and nobody can pay the user through it.</div>
+    </div>
+    <div class="rule hi">
+      <div class="k">Change limit</div>
+      <div class="v">2 new names</div>
+      <div class="d">A user may claim at most two brand-new names over the lifetime of the account, so at most three names in total including the one chosen at registration.</div>
+    </div>
+    <div class="rule hi">
+      <div class="k">Switch back</div>
+      <div class="v">Unlimited &amp; free</div>
+      <div class="d">Every name the user has ever owned stays reserved for that user. Switching back to one of them is always allowed and never consumes the change quota.</div>
+    </div>
+    <div class="rule hi">
+      <div class="k">Support exception</div>
+      <div class="v">Grantable</div>
+      <div class="d">Support can grant an individual user extra changes beyond the two. The grant raises that user's ceiling and is applied through an internal endpoint, never by the user.</div>
+    </div>
+    <div class="rule">
+      <div class="k">Cooldown</div>
+      <div class="v">None</div>
+      <div class="d">No waiting period between changes. Instead, the API always reports the remaining quota and the app must show it to the user before a change is consumed.</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="t">Provenance</div>
+    The rules come from a Google AI Overview describing Cash App behaviour, forwarded by Ari as the decision to follow.
+    They are treated here as <em>our</em> product decision, not as verified Cash App behaviour. Nothing in this spec
+    depends on Cash App actually implementing it this way.
+  </div>
+
+  <h3>Restated precisely</h3>
+  <ol>
+    <li>A username is globally unique across every user and across active and retired names alike.</li>
+    <li>Once a name has been owned by a user it belongs to that user forever, whether active or retired.</li>
+    <li>Exactly one of a user's names is active at any moment. Only the active name resolves for payments.</li>
+    <li>Claiming a name nobody has ever owned consumes one unit of quota. The quota is two, plus any grant given by support.</li>
+    <li>Re-activating a name the user already owns consumes nothing and has no cap.</li>
+    <li>The remaining quota is part of every response, and the app must show it before the user consumes a change.</li>
+  </ol>
+</section>
+
+<!-- ============================================================ -->
+<section id="behaviour">
+  <h2>2. Behaviour on change</h2>
+  <p class="sub">What breaks, what survives, and what the current code already does correctly.</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr><th>Surface</th><th>Behaviour after a change</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>GET /.well-known/lnurlp/:username</code> on the old name</td>
+        <td>Returns <code>404 Username not found</code>. <code>findActiveLightningName</code> already filters <code>active: true</code>, so a retired row is invisible to the pay path with no code change.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td><code>GET /v1/query/pubkey/:username</code> on the old name</td>
+        <td>Returns an empty array. Same <code>active: true</code> filter in <code>query.service.ts</code>.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td><code>GET /v1/query/username/:pubKey</code></td>
+        <td>Returns the new active name. Uses <code>findFirst</code> with <code>active: true</code>.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td>Signed-request authentication</td>
+        <td>Unaffected. <code>SparkSignatureGuard</code> resolves the user by <code>linkingPubKeyHex</code> plus <code>active: true</code>, and the new row carries the same pubkey.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td>BOLT11 invoices already issued under the old name</td>
+        <td>Stay valid and payable. <code>Invoice.usernameId</code> is a foreign key to <code>lightning_names.id</code>, not to the name string, and the retired row is never deleted.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td>Flashnet orders, webhooks and refund cases in flight</td>
+        <td>Unaffected. They hang off <code>Invoice</code>, which hangs off the row id.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td>Spark address of the user</td>
+        <td>Unchanged. It is derived from <code>linkingPubKeyHex</code>, which the change never touches.</td>
+        <td><span class="badge ok">Free</span></td>
+      </tr>
+      <tr>
+        <td>Another user's saved contact holding the old address</td>
+        <td>Becomes a dead address. Contacts live in each device's local storage, so they cannot be updated or invalidated remotely.</td>
+        <td><span class="badge bad">Accepted loss</span></td>
+      </tr>
+      <tr>
+        <td>Printed QR codes, social bios, shared invoices</td>
+        <td>Same as above. There is no alias, forwarding or grace period, and none is planned.</td>
+        <td><span class="badge bad">Accepted loss</span></td>
+      </tr>
+      <tr>
+        <td>A stranger claiming the freed name</td>
+        <td>Impossible by construction. The retired row keeps the unique index on <code>username</code> occupied forever.</td>
+        <td><span class="badge ok">Prevented</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <div class="t">Why so much comes for free</div>
+    Every read path in the service already filters on <code>active: true</code>
+    (<code>src/lnurl/lnurl.service.ts</code>, <code>src/query/query.service.ts</code>, <code>src/auth/spark-signature.guard.ts:88</code>),
+    yet no code anywhere writes <code>active = false</code>. The column is a dormant flag that was clearly designed for exactly
+    this feature. This spec activates it rather than inventing a parallel mechanism.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="scenario">
+  <h2>3. Worked scenario</h2>
+  <p class="sub">One user, the full lifecycle, showing how the quota is counted.</p>
+
+  <ul class="timeline">
+    <li>
+      <div class="act">Registers as <code>alice</code></div>
+      <div class="state">rows: [alice&nbsp;<span style="color:#0E9F6E">active</span>] &nbsp;·&nbsp; changes used 0 of 2</div>
+    </li>
+    <li>
+      <div class="act">Changes to <code>bob</code> &nbsp;<span class="badge info">new name</span></div>
+      <div class="state">rows: [alice retired, bob&nbsp;<span style="color:#0E9F6E">active</span>] &nbsp;·&nbsp; changes used 1 of 2</div>
+    </li>
+    <li>
+      <div class="act">Switches back to <code>alice</code> &nbsp;<span class="badge grey">free</span></div>
+      <div class="state">rows: [alice&nbsp;<span style="color:#0E9F6E">active</span>, bob retired] &nbsp;·&nbsp; changes used 1 of 2</div>
+    </li>
+    <li>
+      <div class="act">Changes to <code>carol</code> &nbsp;<span class="badge info">new name</span></div>
+      <div class="state">rows: [alice retired, bob retired, carol&nbsp;<span style="color:#0E9F6E">active</span>] &nbsp;·&nbsp; changes used 2 of 2</div>
+    </li>
+    <li>
+      <div class="act">Tries a fourth name <code>dave</code></div>
+      <div class="state">rejected with <code>409 CHANGE_LIMIT_REACHED</code></div>
+    </li>
+    <li>
+      <div class="act">Switches back to <code>bob</code> &nbsp;<span class="badge grey">free</span></div>
+      <div class="state">rows: [alice retired, bob&nbsp;<span style="color:#0E9F6E">active</span>, carol retired] &nbsp;·&nbsp; changes used 2 of 2, still allowed</div>
+    </li>
+  </ul>
+
+  <div class="note">
+    <div class="t">The counting trick</div>
+    Changes used is not stored. It is <strong>derived</strong> as <code>count(rows for this user) - 1</code>.
+    Claiming a new name inserts a row and therefore increments it; switching back only flips two boolean flags and
+    therefore does not. No counter column, no counter drift, no way for the two to disagree.
+    The <em>ceiling</em> is the one stored number, because support can raise it: <code>2 + user.bonusUsernameChanges</code>.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="model">
+  <h2>4. Data model</h2>
+  <p class="sub">No new table and no new column are required.</p>
+
+  <p>
+    A user's name history is the set of their <code>LightningName</code> rows. One row is <code>active</code>, the rest are
+    retired. Since <code>username</code> already carries a global unique index, that single index enforces rule 1
+    (global uniqueness) and rule 2 (permanent reservation) at the database level, with no cross-table check and no race window.
+  </p>
+
+  <h3>The one blocker</h3>
+  <p>
+    <code>LightningName.linkingPubKeyHex</code> is declared <code>@unique</code> (<code>prisma/schema.prisma:34</code>).
+    A user with two rows would repeat their own pubkey and violate it. That constraint must be relaxed from
+    "unique per row" to "unique among <em>active</em> rows".
+  </p>
+
+<pre><span class="c">// prisma/schema.prisma</span>
+model LightningName {
+  id                  String  @id @default(cuid(2))
+  username            String  @unique
+  userId              String
+<span class="del">- linkingPubKeyHex    String  @unique // secp256k1 public key hex for LNURL-Auth</span>
+<span class="add">+ linkingPubKeyHex    String          // secp256k1 public key hex for LNURL-Auth</span>
+  active              Boolean @default(true)
+<span class="add">+ createdAt           DateTime @default(now())</span>
+<span class="add">+ updatedAt           DateTime @updatedAt</span>
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+<span class="add">+ @@index([linkingPubKeyHex])</span>
+<span class="add">+ @@index([userId])</span>
+  @@map("lightning_names")
+}</pre>
+
+  <p>
+    <code>createdAt</code> and <code>updatedAt</code> are additive and optional to the feature itself, but they are what makes
+    the history list orderable and the change auditable. They are cheap to add now and awkward to backfill later.
+  </p>
+
+  <h3>The one stored number</h3>
+  <p>
+    Since support can grant extra changes, the <em>ceiling</em> cannot be a constant. It is the only value that has to be
+    persisted, and it lives on <code>User</code>:
+  </p>
+
+<pre><span class="c">// prisma/schema.prisma</span>
+model User {
+  id                       String   @id @default(cuid(2))
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  defaultReceivingCurrency ReceivingCurrency @default(USDB)
+<span class="add">+ bonusUsernameChanges     Int      @default(0)</span>
+
+  lightningNames LightningName[]
+
+  @@map("users")
+}</pre>
+
+  <p>
+    The effective limit is <code>2 + bonusUsernameChanges</code>. Usage stays derived from the row count, so a grant can
+    never desynchronise from reality: it raises the ceiling and nothing else.
+  </p>
+
+  <h3>Enforcing one active row per pubkey</h3>
+  <p>Dropping the unique index removes a real guarantee, so it must be replaced. Two options:</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr><th>Option</th><th>How</th><th>Trade-off</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>A. Generated column</strong><br><span class="badge ok">recommended</span></td>
+        <td>A MySQL generated column <code>activePubKey = IF(active, linkingPubKeyHex, NULL)</code> with a unique index. MySQL allows many <code>NULL</code>s in a unique index, so unlimited retired rows coexist with exactly one active row per pubkey.</td>
+        <td>Enforced by the database, impossible to violate from application code. Prisma does not model generated columns natively, so the column is added in raw SQL and the schema drift must be verified during implementation.</td>
+      </tr>
+      <tr>
+        <td><strong>B. Application-level</strong></td>
+        <td>Flip the flags inside a single Prisma <code>$transaction</code> and never write two active rows.</td>
+        <td>No schema exotica, but the invariant lives only in code. Acceptable given PM2 runs a single process (<code>ecosystem.config.cjs</code>: <code>instances: 1</code>, <code>exec_mode: 'fork'</code>), so there is no concurrent writer today.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    Go with <strong>A</strong>, and fall back to <strong>B</strong> if the Prisma drift proves noisy. Either way the write
+    path is wrapped in a transaction.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="migration">
+  <h2>5. Migration</h2>
+  <p class="sub">MySQL 8, Prisma Migrate. This repo has a real migration history, unlike the Supabase projects.</p>
+
+<pre><span class="c">-- prisma/migrations/&lt;timestamp&gt;_username_change/migration.sql</span>
+
+<span class="c">-- 1. Relax the pubkey uniqueness to allow retired rows</span>
+<span class="kw">DROP INDEX</span> `lightning_names_linkingPubKeyHex_key` <span class="kw">ON</span> `lightning_names`;
+<span class="kw">CREATE INDEX</span> `lightning_names_linkingPubKeyHex_idx` <span class="kw">ON</span> `lightning_names`(`linkingPubKeyHex`);
+<span class="kw">CREATE INDEX</span> `lightning_names_userId_idx` <span class="kw">ON</span> `lightning_names`(`userId`);
+
+<span class="c">-- 2. Re-establish "one active name per pubkey" (Option A)</span>
+<span class="kw">ALTER TABLE</span> `lightning_names`
+  <span class="kw">ADD COLUMN</span> `activePubKey` <span class="kw">VARCHAR</span>(191)
+    <span class="kw">GENERATED ALWAYS AS</span> (<span class="kw">IF</span>(`active`, `linkingPubKeyHex`, <span class="kw">NULL</span>)) <span class="kw">STORED</span>;
+
+<span class="kw">CREATE UNIQUE INDEX</span> `lightning_names_activePubKey_key`
+  <span class="kw">ON</span> `lightning_names`(`activePubKey`);
+
+<span class="c">-- 3. Audit timestamps (existing rows get the migration time)</span>
+<span class="kw">ALTER TABLE</span> `lightning_names`
+  <span class="kw">ADD COLUMN</span> `createdAt` <span class="kw">DATETIME</span>(3) <span class="kw">NOT NULL DEFAULT</span> <span class="kw">CURRENT_TIMESTAMP</span>(3),
+  <span class="kw">ADD COLUMN</span> `updatedAt` <span class="kw">DATETIME</span>(3) <span class="kw">NOT NULL DEFAULT</span> <span class="kw">CURRENT_TIMESTAMP</span>(3);
+
+<span class="c">-- 4. Support-grantable ceiling</span>
+<span class="kw">ALTER TABLE</span> `users`
+  <span class="kw">ADD COLUMN</span> `bonusUsernameChanges` <span class="kw">INT</span> <span class="kw">NOT NULL DEFAULT</span> 0;</pre>
+
+  <div class="note warn">
+    <div class="t">Verify before running</div>
+    The index name <code>lightning_names_linkingPubKeyHex_key</code> is Prisma's default naming convention and must be
+    confirmed against the live database (<code>SHOW INDEX FROM lightning_names</code>) before the migration is applied.
+    <code>createdAt</code> on pre-existing rows will read as the migration timestamp, not the real registration time.
+    That is acceptable; it should not be presented to users as a registration date.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="api">
+  <h2>6. API</h2>
+  <p class="sub">A new <code>username</code> module, structurally identical to the existing <code>currency-preference</code> module.</p>
+
+  <p>
+    Both endpoints sit behind <code>SparkSignatureGuard</code>, so the caller proves possession of the Spark identity key
+    by signing <code>{METHOD}:{url}:{timestamp}:{bodyHash}</code> as documented in
+    <a href="./spark-signature-auth.md">spark-signature-auth.md</a>. No new authentication work is needed.
+  </p>
+
+  <h3>GET /v1/users/me/username</h3>
+  <p>Returns the active name, the full history and the remaining quota, so the app can render the screen without guessing.</p>
+
+<pre>{
+  <span class="st">"username"</span>: <span class="st">"carol"</span>,
+  <span class="st">"lightningAddress"</span>: <span class="st">"carol@guap.to"</span>,
+  <span class="st">"changesUsed"</span>: 2,
+  <span class="st">"changesLimit"</span>: 2,
+  <span class="st">"changesRemaining"</span>: 0,
+  <span class="st">"history"</span>: [
+    { <span class="st">"username"</span>: <span class="st">"carol"</span>, <span class="st">"active"</span>: true,  <span class="st">"since"</span>: <span class="st">"2026-08-07T13:02:11.000Z"</span> },
+    { <span class="st">"username"</span>: <span class="st">"bob"</span>,   <span class="st">"active"</span>: false, <span class="st">"since"</span>: <span class="st">"2026-07-30T09:44:02.000Z"</span> },
+    { <span class="st">"username"</span>: <span class="st">"alice"</span>, <span class="st">"active"</span>: false, <span class="st">"since"</span>: <span class="st">"2026-06-01T18:20:55.000Z"</span> }
+  ]
+}</pre>
+
+  <h3>PATCH /v1/users/me/username</h3>
+  <p>Body: <code>{ "username": "bob" }</code>, validated by a <code>class-validator</code> DTO plus <code>normalizeUsername</code>.</p>
+
+<pre>{
+  <span class="st">"username"</span>: <span class="st">"bob"</span>,
+  <span class="st">"lightningAddress"</span>: <span class="st">"bob@guap.to"</span>,
+  <span class="st">"changesUsed"</span>: 2,
+  <span class="st">"changesLimit"</span>: 2,
+  <span class="st">"changesRemaining"</span>: 0,
+  <span class="st">"switchedBack"</span>: true
+}</pre>
+
+  <p><code>switchedBack</code> tells the client whether the operation consumed quota, so the UI can explain itself accurately.</p>
+
+  <div class="note">
+    <div class="t">Quota fields are a hard requirement, not decoration</div>
+    <code>changesLimit</code> and <code>changesRemaining</code> are returned by <strong>both</strong> endpoints and both are
+    computed server-side as <code>2 + bonusUsernameChanges</code> and <code>limit - used</code>. The app must never derive
+    the remaining count from a hard-coded 2, because a support grant raises the ceiling for that user only and the client
+    has no other way to learn it.
+  </div>
+
+  <h3>Responses</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr><th>Status</th><th class="mono">code</th><th>When</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="badge ok">200</span></td><td class="mono">&mdash;</td><td>Name changed or switched back.</td></tr>
+      <tr><td><span class="badge warn">400</span></td><td class="mono">INVALID_USERNAME</td><td>Fails <code>^[a-z0-9._-]{1,30}$</code> in <code>normalizeUsername</code>.</td></tr>
+      <tr><td><span class="badge warn">400</span></td><td class="mono">SAME_USERNAME</td><td>Target equals the currently active name. Rejected rather than treated as a silent no-op, so the client never reports a change that did not happen.</td></tr>
+      <tr><td><span class="badge bad">401</span></td><td class="mono">&mdash;</td><td>Guard rejection: missing headers, timestamp skew, bad signature, unknown pubkey, or a replayed request.</td></tr>
+      <tr><td><span class="badge warn">409</span></td><td class="mono">USERNAME_TAKEN</td><td>The name is active or retired under any account, including a name retired by a different user.</td></tr>
+      <tr><td><span class="badge warn">409</span></td><td class="mono">CHANGE_LIMIT_REACHED</td><td>The user's ceiling of <code>2 + bonusUsernameChanges</code> new names is already spent and the target is not in this user's history.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <div class="t">Deliberate leak</div>
+    <code>USERNAME_TAKEN</code> does not distinguish "active elsewhere" from "retired elsewhere". Both are equally
+    unavailable, and separating them would tell a caller that a specific name was once in use. The existing
+    <code>.well-known/lnurlp/</code> probe already reveals which names are <em>active</em>; it must not start revealing
+    retired ones, so retired names stay 404 there.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="logic">
+  <h2>7. Change logic</h2>
+  <p class="sub">One transaction, five checks. <code>UsernameService.changeUsername(userId, rawUsername)</code>.</p>
+
+  <div class="flow">
+    <div class="step">
+      <div class="n">1</div>
+      <div class="body"><strong>Normalize</strong><span>Run <code>normalizeUsername</code>. A throw becomes <code>400 INVALID_USERNAME</code>. Every comparison below uses the normalized form.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">2</div>
+      <div class="body"><strong>Load the user's rows</strong><span>All <code>LightningName</code> rows for <code>userId</code>. One is active; identify it and the target.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">3</div>
+      <div class="body"><strong>Classify the request</strong><span>Target present in the user's own rows means <em>switch back</em>, free and always permitted. Otherwise it is a <em>new claim</em> and consumes quota.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">4</div>
+      <div class="body"><strong>Gate the new claim</strong><span>Reject with <code>409 CHANGE_LIMIT_REACHED</code> when <code>rows.length - 1 &gt;= 2 + user.bonusUsernameChanges</code>. Then check global availability; a hit anywhere in <code>lightning_names</code> is <code>409 USERNAME_TAKEN</code>.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">5</div>
+      <div class="body"><strong>Apply in one transaction</strong><span>Set the current active row to <code>active: false</code>, then either flip the existing target row to <code>active: true</code> or insert a new row with the same <code>linkingPubKeyHex</code>. Catch Prisma <code>P2002</code> and map it to <code>409 USERNAME_TAKEN</code>, which closes the check-then-act window.</span></div>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <div class="t">Order matters</div>
+    Deactivate before activating. With the generated-column unique index in place, activating first would momentarily
+    leave two active rows carrying the same pubkey and the statement would fail.
+  </div>
+
+  <h3>The same gap exists in registration</h3>
+  <p>
+    <code>AuthService.verifyAndBindUsername</code> currently does a <code>findUnique</code> availability check and then a
+    separate <code>create</code>. That check-then-act window is pre-existing, and once retired names occupy the same index it
+    also has to reject them. Registration must be updated in the same change to catch <code>P2002</code> and to reject any name
+    already present in <code>lightning_names</code>, active or not. Without this, permanent reservation is not actually enforced.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="security">
+  <h2>8. Security</h2>
+
+  <h3>Replay protection is now mandatory</h3>
+  <p>
+    <code>docs/spark-signature-auth.md</code> defers the replay LRU with an explicit condition:
+    <em>"Revisit when a non-idempotent signed endpoint ships."</em> This is that endpoint. Replaying a captured
+    <code>PATCH</code> within the 60&nbsp;second skew window would consume quota a second time, and after the quota is
+    exhausted it would silently flip the user's active name.
+  </p>
+  <p>
+    Add to <code>SparkSignatureGuard</code> an in-memory LRU keyed by
+    <code>sha256(pubkey|timestamp|signature)</code>, with entries expiring after <code>AUTH_MAX_SKEW_MS</code>. A hit is
+    <code>401</code>. This is sound because PM2 runs a single fork process; if the service is ever scaled to multiple
+    instances or replicas, the LRU stops protecting and must move to shared storage.
+  </p>
+
+  <h3>Abuse surface</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Vector</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Name squatting through repeated registration</td>
+        <td>Unchanged by this feature, but note the quota only limits <em>changes</em>. Nothing stops one person creating many wallets and registering many names, which is the pre-existing situation.</td>
+      </tr>
+      <tr>
+        <td>Unlimited switch-back flapping</td>
+        <td>Free and uncapped by rule, with no cooldown by decision. Each call is a cheap two-row update, so the impact is load rather than harm, and the names involved are all already owned by that user.</td>
+      </tr>
+      <tr>
+        <td>Abuse of the support grant</td>
+        <td>The grant endpoint is bearer-token protected and fail-closed. <code>amount</code> is capped and negative values are rejected, so a single call cannot hand out an unbounded allowance.</td>
+      </tr>
+      <tr>
+        <td>Enumerating retired names</td>
+        <td>Not possible through the public paths: <code>.well-known/lnurlp/</code> and <code>/v1/query/</code> both filter <code>active: true</code>. Only <code>PATCH</code> reveals unavailability, and it requires a valid signature.</td>
+      </tr>
+      <tr>
+        <td>Stolen identity key</td>
+        <td>An attacker with the key can already spend. Renaming is strictly less severe and is bounded by the quota.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ops">
+  <h2>9. Ops endpoint</h2>
+  <p class="sub">Confirmed by Ari: support can grant an extra change. Ships with the feature.</p>
+
+  <p>
+    Because <code>changesUsed</code> is derived from the row count, it cannot be decremented. A grant therefore raises the
+    ceiling through <code>User.bonusUsernameChanges</code> (see section 4) rather than rewriting history. The endpoint
+    reuses <code>InternalOpsGuard</code> (bearer <code>INTERNAL_OPS_TOKEN</code>, fail-closed when unset, constant-time
+    compare), matching the existing <code>v1/internal/refund-cases</code> surface:
+  </p>
+
+<pre>POST /v1/internal/username-changes/:pubkey/grant
+Authorization: Bearer &lt;INTERNAL_OPS_TOKEN&gt;
+
+{ <span class="st">"amount"</span>: 1, <span class="st">"reason"</span>: <span class="st">"typo in original registration"</span> }
+
+<span class="c">// 200</span>
+{
+  <span class="st">"pubkey"</span>: <span class="st">"02698ba4…"</span>,
+  <span class="st">"username"</span>: <span class="st">"carol"</span>,
+  <span class="st">"changesUsed"</span>: 2,
+  <span class="st">"changesLimit"</span>: 3,
+  <span class="st">"changesRemaining"</span>: 1
+}</pre>
+
+  <p>
+    The user is addressed by <code>linkingPubKeyHex</code>, because that is the identifier support can obtain from the
+    customer and from the existing query endpoints. The internal <code>User.id</code> is not exposed anywhere today and
+    should not start being exposed for this.
+  </p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Rule</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td><code>amount</code></td><td>Positive integer, increments the existing bonus. Capped at a small value (suggest 5) so a typo cannot hand out an unbounded allowance.</td></tr>
+      <tr><td><code>reason</code></td><td>Required, non-empty. Logged with the grant. The endpoint has no audit table, so the structured log is the only record; that is consistent with how refund-case ops behave today.</td></tr>
+      <tr><td>Unknown pubkey</td><td><code>404</code>. No user is created implicitly.</td></tr>
+      <tr><td>Revoking a grant</td><td>Not supported. Negative amounts are rejected. Removing an allowance that a user may have already spent has no coherent meaning.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note warn">
+    <div class="t">The token must actually be set</div>
+    <code>INTERNAL_OPS_TOKEN</code> is empty in <code>env.example</code> and <code>InternalOpsGuard</code> fails closed when
+    unset, rejecting every request with <code>401 Ops endpoint is not configured</code>. If the production environment has
+    never set it, the grant endpoint will appear broken rather than protected. Verify it is set before support is told the
+    feature exists.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="app">
+  <h2>10. Mobile app changes</h2>
+  <p class="sub">Repo <code>guap-rn</code>. Backend and app ship independently; the endpoint is additive.</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>File</th><th>Change</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="mono">packages/lightning-address/<br>src/lightningAddressService.ts</td>
+        <td>Add <code>getUsernameInfo()</code> and <code>changeUsername(name)</code>. Both build the canonical message and sign it with the identity key, which is a new capability for this service; it currently only signs the registration <code>k1</code>. Rule 34 keeps this in <code>packages/</code>, not in the app.</td>
+      </tr>
+      <tr>
+        <td class="mono">packages/lightning-address/<br>src/lightningAddressService.ts</td>
+        <td>The singleton caches <code>username</code> and <code>lightningAddress</code> and can only populate them through <code>initialize()</code>, which throws if already initialized. A rename needs an internal refresh path that updates the cached pair without tearing down the instance via <code>reset()</code>.</td>
+      </tr>
+      <tr>
+        <td class="mono">apps/guap/src/hooks/settings/<br>useLightningAddress.ts</td>
+        <td>Reuse <code>filterUsernameInput</code> and the debounced availability check. Note its <code>validateUsername</code> allows up to 64 characters while the server caps at 30 through <code>normalizeUsername</code>; the client rule must be tightened to match or users will hit a server-side <code>400</code> after the UI said the name was fine.</td>
+      </tr>
+      <tr>
+        <td class="mono">apps/guap/src/screens/Settings/…</td>
+        <td>New screen: current address, remaining changes, the history list with a tap-to-switch-back action, and a confirmation step (see the quota warning below).</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>The quota warning is a requirement</h3>
+  <p>
+    Ari's decision replaces a cooldown with disclosure: there is no waiting period, so the only thing standing between a
+    user and an exhausted quota is the app telling them. The confirmation step, shown before the change is submitted, must
+    state all of the following:
+  </p>
+
+  <div class="flow">
+    <div class="step">
+      <div class="n">1</div>
+      <div class="body"><strong>How many changes remain after this one</strong><span>Read from <code>changesRemaining</code> in <code>GET /v1/users/me/username</code>, never from a hard-coded 2. A user granted an exception by support has a higher ceiling and the app only learns it from the API.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">2</div>
+      <div class="body"><strong>That this one is free, when it is</strong><span>Switching back to a name already in the history consumes nothing. The app knows this before calling, because the target appears in <code>history</code>. The confirmation for a switch back must not warn about spending quota.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">3</div>
+      <div class="body"><strong>That the old address stops working immediately</strong><span>And that saved contacts held by other people will break, with no way to notify them.</span></div>
+    </div>
+    <div class="step">
+      <div class="n">4</div>
+      <div class="body"><strong>That the old name stays yours</strong><span>Nobody else can take it and the user can switch back at any time, for free. This is the reassuring half and it materially changes how risky the action feels.</span></div>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <div class="t">Last change deserves a stronger step</div>
+    When <code>changesRemaining</code> would reach 0, the confirmation should say so explicitly rather than reusing the
+    generic copy. After that point the user can only cycle among names they already own, and support intervention is the
+    only way out.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="limits">
+  <h2>11. Accepted limitations</h2>
+  <p class="sub">Explicitly out of scope. Listed so they are decisions rather than oversights.</p>
+
+  <ul>
+    <li><strong>No forwarding or alias.</strong> The old address returns 404 immediately. Cash App behaves the same way, so following its rules does not remove this.</li>
+    <li><strong>No notification to payers.</strong> There is no registry of who saved a given address, so nobody can be told it changed.</li>
+    <li><strong>Contacts on other devices are not repairable.</strong> They are local to each device and hold the address as a literal string.</li>
+    <li><strong>No cooldown between changes.</strong> Decided deliberately. The quota plus the in-app disclosure of the remaining count replace a waiting period, so a user can change and switch back as fast as they like.</li>
+    <li><strong>No name reclamation for deleted accounts.</strong> Out of scope, and the current service has no account-deletion flow.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="tests">
+  <h2>12. Test plan</h2>
+  <p class="sub">Jest unit specs beside each file, plus e2e against the test MySQL on port 3309.</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Level</th><th>Case</th><th>Expected</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="8">Unit<br><span class="mono" style="font-size:12px">username.service.spec.ts</span></td>
+          <td>Change to an unused name, quota available</td><td>200, old row retired, new row active, <code>changesUsed</code> incremented</td></tr>
+      <tr><td>Change to a name in own history</td><td>200, <code>switchedBack: true</code>, <code>changesUsed</code> unchanged</td></tr>
+      <tr><td>Change to a name active under another user</td><td>409 <code>USERNAME_TAKEN</code></td></tr>
+      <tr><td>Change to a name <em>retired</em> under another user</td><td>409 <code>USERNAME_TAKEN</code></td></tr>
+      <tr><td>Third new name</td><td>409 <code>CHANGE_LIMIT_REACHED</code></td></tr>
+      <tr><td>Switch back after the quota is exhausted</td><td>200, still permitted</td></tr>
+      <tr><td>Target equals current active name</td><td>400 <code>SAME_USERNAME</code></td></tr>
+      <tr><td>Uppercase, padded and invalid-character input</td><td>Normalized or 400, matching <code>normalizeUsername</code></td></tr>
+      <tr><td>User with <code>bonusUsernameChanges: 1</code> claims a third new name</td><td>200, <code>changesLimit: 3</code></td></tr>
+      <tr><td>Same user attempts a fourth</td><td>409 <code>CHANGE_LIMIT_REACHED</code></td></tr>
+
+      <tr><td rowspan="3">Unit<br><span class="mono" style="font-size:12px">username-ops.controller.spec.ts</span></td>
+          <td>Grant without a bearer token, and with a wrong one</td><td>401 in both cases</td></tr>
+      <tr><td>Grant with <code>amount: 1</code> on a known pubkey</td><td>200, ceiling raised by one, reason logged</td></tr>
+      <tr><td>Grant with a negative, zero or over-cap <code>amount</code></td><td>400, bonus unchanged</td></tr>
+
+      <tr><td rowspan="3">Unit<br><span class="mono" style="font-size:12px">spark-signature.guard.spec.ts</span></td>
+          <td>Same signature replayed inside the skew window</td><td>401</td></tr>
+      <tr><td>LRU entry expired, signature reused</td><td>401 by timestamp skew, not by the LRU</td></tr>
+      <tr><td>Guard resolves the user after a rename</td><td>Resolves through the new active row</td></tr>
+
+      <tr><td rowspan="4">e2e</td>
+          <td>Register, change twice, attempt a third</td><td>Final attempt 409</td></tr>
+      <tr><td><code>.well-known/lnurlp/</code> on the retired name</td><td>404</td></tr>
+      <tr><td><code>/v1/query/username/:pubKey</code> after a rename</td><td>Returns the new name only</td></tr>
+      <tr><td>Invoice created before the rename</td><td>Still readable and still linked to the retired row</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    The registration change also needs a regression test: registering a name that is retired under another user must be
+    rejected. That single test is what proves permanent reservation actually holds.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="rollout">
+  <h2>13. Rollout</h2>
+
+  <div class="flow">
+    <div class="step"><div class="n">1</div><div class="body"><strong>Verify index names on the live database</strong><span><code>SHOW INDEX FROM lightning_names</code> before writing the final migration SQL.</span></div></div>
+    <div class="step"><div class="n">2</div><div class="body"><strong>Back up</strong><span>The migration drops a unique index. Take a dump first; there is a single production MySQL behind this service.</span></div></div>
+    <div class="step"><div class="n">3</div><div class="body"><strong>Apply the migration</strong><span><code>npx prisma migrate deploy</code>. Existing rows keep their data; they only gain the two timestamp columns and a <code>bonusUsernameChanges</code> of 0.</span></div></div>
+    <div class="step"><div class="n">4</div><div class="body"><strong>Confirm <code>INTERNAL_OPS_TOKEN</code> is set in production</strong><span>The grant endpoint ships with the feature and <code>InternalOpsGuard</code> fails closed. No new variable is introduced, but this existing one must actually hold a value.</span></div></div>
+    <div class="step"><div class="n">5</div><div class="body"><strong>Deploy and restart</strong><span><code>npm run build</code> then <code>pm2 restart spark-ln-address</code>.</span></div></div>
+    <div class="step"><div class="n">6</div><div class="body"><strong>Backend first, app after</strong><span>The endpoints are additive, so the current app build keeps working untouched. The Settings screen can follow in the next release.</span></div></div>
+  </div>
+
+  <p>
+    There is no feature flag proposed. The endpoint is inert until the app calls it, which makes a flag redundant. If
+    a staged rollout is wanted anyway, the cheapest gate is an env variable checked in the controller, following the
+    <code>USDB_ENABLED</code> pattern already in <code>env.example</code>.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="open">
+  <h2>14. Decisions and remaining questions</h2>
+  <p class="sub">Nothing here blocks implementation.</p>
+
+  <h3>Settled</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Question</th><th>Decision</th><th>Where it lands</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Is the old name blocked after a change?</td>
+        <td><span class="badge ok">Yes, forever</span> Retired and reserved for the original owner.</td>
+        <td>Sections 1, 4</td>
+      </tr>
+      <tr>
+        <td>How many changes per user?</td>
+        <td><span class="badge ok">Two new names</span> Switching back is unlimited and free.</td>
+        <td>Sections 1, 7</td>
+      </tr>
+      <tr>
+        <td>Can support grant an extra change?</td>
+        <td><span class="badge ok">Yes</span> Ari, 2026-08-07. Ships with the feature.</td>
+        <td>Sections 4, 9</td>
+      </tr>
+      <tr>
+        <td>Cooldown between changes?</td>
+        <td><span class="badge ok">No</span> Replaced by mandatory in-app disclosure of the remaining quota before each change.</td>
+        <td>Sections 6, 10</td>
+      </tr>
+      <tr>
+        <td>Support script for a dead address</td>
+        <td><span class="badge grey">Out of scope</span> Handled outside this spec.</td>
+        <td>&mdash;</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Still open</h3>
+  <div class="q">
+    <div class="qh">Q1 &nbsp;<span class="badge info">implementation</span>&nbsp; Generated column versus application-level invariant</div>
+    <div class="qb">Section 4 recommends the MySQL generated column with a unique index. This resolves during implementation, once Prisma's drift behaviour is verified against the real database. The fallback is the transaction-only invariant, and either way the rest of the work is unaffected.</div>
+  </div>
+
+  <div class="q">
+    <div class="qh">Q2 &nbsp;<span class="badge info">implementation</span>&nbsp; Cap on a single grant</div>
+    <div class="qb">Section 9 suggests a maximum <code>amount</code> of 5 per call so a typo cannot hand out an unbounded allowance. The exact number is not important and can be set at implementation time; only having <em>a</em> cap matters.</div>
+  </div>
+</section>
+
+<footer class="end">
+  spark-ln-address &middot; docs/username-change.html &middot; baseline commit 3657069 on <code>develop</code>
+</footer>
+
+</div>
+</body>
+</html>
