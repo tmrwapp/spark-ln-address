@@ -711,22 +711,27 @@ model User {
     </thead>
     <tbody>
       <tr>
-        <td><strong>A. Generated column</strong><br><span class="badge ok">recommended</span></td>
-        <td>A MySQL generated column <code>activePubKey = IF(active, linkingPubKeyHex, NULL)</code> with a unique index. MySQL allows many <code>NULL</code>s in a unique index, so unlimited retired rows coexist with exactly one active row per pubkey.</td>
-        <td>Enforced by the database, impossible to violate from application code. Prisma does not model generated columns natively, so the column is added in raw SQL and the schema drift must be verified during implementation.</td>
+        <td><strong>A. Nullable mirror column</strong><br><span class="badge ok">shipped</span></td>
+        <td>A plain nullable <code>activePubKey</code> holding a copy of the pubkey while the row is active and <code>NULL</code> once retired, with a unique index. MySQL allows many <code>NULL</code>s in a unique index, so unlimited retired rows coexist with exactly one active row per pubkey. The application writes it in the same statement that flips <code>active</code>.</td>
+        <td>Prisma-native, so it survives future <code>migrate</code> runs. The database still catches the dangerous case, because two active rows for one pubkey would collide on the index. The application does have to keep the column in step with <code>active</code>, which the tests assert.</td>
       </tr>
       <tr>
-        <td><strong>B. Application-level</strong></td>
-        <td>Flip the flags inside a single Prisma <code>$transaction</code> and never write two active rows.</td>
-        <td>No schema exotica, but the invariant lives only in code. Acceptable given PM2 runs a single process (<code>ecosystem.config.cjs</code>: <code>instances: 1</code>, <code>exec_mode: 'fork'</code>), so there is no concurrent writer today.</td>
+        <td><strong>B. Generated column</strong><br><span class="badge bad">rejected</span></td>
+        <td>The same column, but computed by MySQL as <code>IF(active, linkingPubKeyHex, NULL)</code> so it can never fall out of step.</td>
+        <td>Airtight in principle, but Prisma cannot express a generated column. The next <code>prisma migrate dev</code> would read it as drift and generate a migration dropping the very index that protects the invariant. Trading a silent landmine for a redundancy the tests already cover is a bad deal.</td>
+      </tr>
+      <tr>
+        <td><strong>C. Application-level only</strong><br><span class="badge grey">not needed</span></td>
+        <td>Flip the flags inside a single Prisma <code>$transaction</code> and rely on nothing else.</td>
+        <td>Would have been acceptable, since PM2 runs one process (<code>ecosystem.config.cjs</code>: <code>instances: 1</code>, <code>exec_mode: 'fork'</code>) and there is no concurrent writer today. Option A costs one column and keeps the guarantee if that ever changes.</td>
       </tr>
     </tbody>
   </table>
   </div>
 
   <p>
-    Go with <strong>A</strong>, and fall back to <strong>B</strong> if the Prisma drift proves noisy. Either way the write
-    path is wrapped in a transaction.
+    <strong>A</strong> shipped. Either way the write path is wrapped in a transaction, and it deactivates before
+    activating so the unique index is never momentarily doubled.
   </p>
 </section>
 
@@ -789,9 +794,9 @@ model User {
   <span class="st">"changesLimit"</span>: 2,
   <span class="st">"changesRemaining"</span>: 0,
   <span class="st">"history"</span>: [
-    { <span class="st">"username"</span>: <span class="st">"carol"</span>, <span class="st">"active"</span>: true,  <span class="st">"since"</span>: <span class="st">"2026-08-07T13:02:11.000Z"</span> },
-    { <span class="st">"username"</span>: <span class="st">"bob"</span>,   <span class="st">"active"</span>: false, <span class="st">"since"</span>: <span class="st">"2026-07-30T09:44:02.000Z"</span> },
-    { <span class="st">"username"</span>: <span class="st">"alice"</span>, <span class="st">"active"</span>: false, <span class="st">"since"</span>: <span class="st">"2026-06-01T18:20:55.000Z"</span> }
+    { <span class="st">"username"</span>: <span class="st">"carol"</span>, <span class="st">"active"</span>: true,  <span class="st">"claimedAt"</span>: <span class="st">"2026-08-07T13:02:11.000Z"</span> },
+    { <span class="st">"username"</span>: <span class="st">"bob"</span>,   <span class="st">"active"</span>: false, <span class="st">"claimedAt"</span>: <span class="st">"2026-07-30T09:44:02.000Z"</span> },
+    { <span class="st">"username"</span>: <span class="st">"alice"</span>, <span class="st">"active"</span>: false, <span class="st">"claimedAt"</span>: <span class="st">"2026-06-01T18:20:55.000Z"</span> }
   ]
 }</pre>
 
@@ -877,13 +882,22 @@ model User {
     leave two active rows carrying the same pubkey and the statement would fail.
   </div>
 
-  <h3>The same gap exists in registration</h3>
+  <h3>What registration needs, and what it does not</h3>
   <p>
-    <code>AuthService.verifyAndBindUsername</code> currently does a <code>findUnique</code> availability check and then a
-    separate <code>create</code>. That check-then-act window is pre-existing, and once retired names occupy the same index it
-    also has to reject them. Registration must be updated in the same change to catch <code>P2002</code> and to reject any name
-    already present in <code>lightning_names</code>, active or not. Without this, permanent reservation is not actually enforced.
+    <code>AuthService.verifyAndBindUsername</code> checks availability with
+    <code>findUnique({ where: { username } })</code>, which has no <code>active</code> filter. Retired rows therefore block
+    re-registration <em>already</em>, with no change at all: permanent reservation falls out of the data model rather than
+    having to be coded. An earlier draft of this spec claimed otherwise; that claim applied to a history-table design, not
+    to the one that shipped. A regression test pins the behaviour.
   </p>
+  <p>Registration still changes, for two unrelated reasons:</p>
+  <ul>
+    <li>It must write <code>activePubKey</code> on the new row, or the invariant is unenforced for freshly registered users.</li>
+    <li>Its check-then-act window is pre-existing: two registrations racing on one name both pass the check and one loses at
+      the unique index. It now creates the <code>User</code> and the <code>LightningName</code> in a single transaction, so a
+      loser cannot leave an orphaned <code>User</code> behind, and reports <code>P2002</code> as a taken username rather than
+      a 500.</li>
+  </ul>
 </section>
 
 <!-- ============================================================ -->
@@ -1169,15 +1183,15 @@ Authorization: Bearer &lt;INTERNAL_OPS_TOKEN&gt;
   </table>
   </div>
 
-  <h3>Still open</h3>
+  <h3>Resolved during implementation</h3>
   <div class="q">
-    <div class="qh">Q1 &nbsp;<span class="badge info">implementation</span>&nbsp; Generated column versus application-level invariant</div>
-    <div class="qb">Section 4 recommends the MySQL generated column with a unique index. This resolves during implementation, once Prisma's drift behaviour is verified against the real database. The fallback is the transaction-only invariant, and either way the rest of the work is unaffected.</div>
+    <div class="qh">Q1 &nbsp;<span class="badge ok">closed</span>&nbsp; Generated column versus application-level invariant</div>
+    <div class="qb">Neither. A plain nullable <code>activePubKey</code> with a unique index ships instead, because a generated column is not expressible in the Prisma schema and the next <code>prisma migrate dev</code> would drop the index protecting the invariant. See section 4.</div>
   </div>
 
   <div class="q">
-    <div class="qh">Q2 &nbsp;<span class="badge info">implementation</span>&nbsp; Cap on a single grant</div>
-    <div class="qb">Section 9 suggests a maximum <code>amount</code> of 5 per call so a typo cannot hand out an unbounded allowance. The exact number is not important and can be set at implementation time; only having <em>a</em> cap matters.</div>
+    <div class="qh">Q2 &nbsp;<span class="badge ok">closed</span>&nbsp; Cap on a single grant</div>
+    <div class="qb">Set to 5 per call (<code>MAX_GRANT_PER_CALL</code>), enforced by the DTO alongside a minimum of 1, so a negative or fat-fingered amount is rejected before it reaches the service.</div>
   </div>
 </section>
 
