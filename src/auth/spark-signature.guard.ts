@@ -13,10 +13,38 @@ import type { Request } from 'express'
 
 const DEFAULT_MAX_SKEW_MS = 60000
 
+/**
+ * Hard cap on remembered signatures. Entries expire after maxSkewMs, so this is
+ * only reached under a flood; evicting the oldest then is preferable to growing
+ * without bound.
+ */
+const REPLAY_CACHE_MAX_ENTRIES = 10000
+
 @Injectable()
 export class SparkSignatureGuard implements CanActivate {
   private readonly logger = new Logger(SparkSignatureGuard.name)
   private readonly maxSkewMs: number
+
+  /**
+   * Signatures already accepted, keyed by a digest of the auth triple and mapped
+   * to their expiry. A valid client never repeats one, because the timestamp is
+   * part of the signed message.
+   *
+   * Required by the username endpoints: PATCH /v1/users/me/username is NOT
+   * idempotent, so a request captured inside the skew window could otherwise be
+   * replayed to spend another unit of the change quota, or to flip the user's
+   * active name once the quota is gone.
+   *
+   * A Map preserves insertion order and every entry shares the same lifetime, so
+   * the oldest key is always the first to expire and pruning can stop at the
+   * first live entry.
+   *
+   * This is process-local. PM2 runs a single fork instance today
+   * (ecosystem.config.cjs), so it covers every request. Scaling to more than one
+   * instance or replica would silently weaken it and the cache would have to move
+   * to shared storage.
+   */
+  private readonly seenSignatures = new Map<string, number>()
 
   constructor(
     private readonly prisma: PrismaService,
@@ -78,12 +106,20 @@ export class SparkSignatureGuard implements CanActivate {
     const canonicalBuffer = Buffer.from(canonicalMessage, 'utf8')
     const normalizedPubkey = pubkey.toLowerCase()
 
-    const valid = await verifySignature(canonicalBuffer, signature, normalizedPubkey)
+    const valid = await verifySignature(
+      canonicalBuffer,
+      signature,
+      normalizedPubkey,
+    )
     if (!valid) {
       throw new UnauthorizedException('Invalid signature')
     }
 
-    // 6. Look up user by linkingPubKeyHex
+    // 6. Reject replays of an already-accepted signature. Runs after
+    // verification so that unverified traffic cannot fill the cache.
+    this.rejectReplay(normalizedPubkey, timestamp, signature)
+
+    // 7. Look up user by linkingPubKeyHex
     const lightningName = await this.prisma.lightningName.findFirst({
       where: { linkingPubKeyHex: normalizedPubkey, active: true },
       include: { user: true },
@@ -93,9 +129,55 @@ export class SparkSignatureGuard implements CanActivate {
       throw new UnauthorizedException('Unknown pubkey')
     }
 
-    // 7. Attach resolved user to request
+    // 8. Attach resolved user to request
     req.user = lightningName.user
 
     return true
+  }
+
+  /**
+   * Throws when this exact signature has already been accepted, and otherwise
+   * records it until it falls outside the skew window.
+   */
+  private rejectReplay(
+    pubkey: string,
+    timestamp: string,
+    signature: string,
+  ): void {
+    const now = Date.now()
+    this.pruneSeenSignatures(now)
+
+    const key = createHash('sha256')
+      .update(`${pubkey}:${timestamp}:${signature}`)
+      .digest('hex')
+
+    if (this.seenSignatures.has(key)) {
+      this.logger.warn(`Replayed signature rejected for pubkey ${pubkey}`)
+      throw new UnauthorizedException('Signature already used')
+    }
+
+    // Once the timestamp leaves the skew window the skew check rejects the
+    // request on its own, so remembering it any longer adds nothing.
+    this.seenSignatures.set(key, now + this.maxSkewMs)
+
+    if (this.seenSignatures.size > REPLAY_CACHE_MAX_ENTRIES) {
+      const oldest = this.seenSignatures.keys().next()
+      if (!oldest.done) {
+        this.seenSignatures.delete(oldest.value)
+      }
+    }
+  }
+
+  /**
+   * Drops expired entries. All entries share one lifetime, so insertion order is
+   * expiry order and the scan can stop at the first live entry.
+   */
+  private pruneSeenSignatures(now: number): void {
+    for (const [key, expiresAt] of this.seenSignatures) {
+      if (expiresAt > now) {
+        break
+      }
+      this.seenSignatures.delete(key)
+    }
   }
 }

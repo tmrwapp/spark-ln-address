@@ -1,22 +1,23 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { Test, TestingModule } from '@nestjs/testing'
+import { AppController } from './app.controller'
 
 describe('AppController', () => {
-  let appController: AppController;
+  let appController: AppController
 
   beforeEach(async () => {
     const app: TestingModule = await Test.createTestingModule({
       controllers: [AppController],
-      providers: [AppService],
-    }).compile();
+    }).compile()
 
-    appController = app.get<AppController>(AppController);
-  });
+    appController = app.get<AppController>(AppController)
+  })
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHealth()).toBe('Hello World!');
-    });
-  });
-});
+  describe('health', () => {
+    it('reports ok with a timestamp', () => {
+      const result = appController.getHealth()
+
+      expect(result.status).toBe('ok')
+      expect(Number.isNaN(Date.parse(result.timestamp))).toBe(false)
+    })
+  })
+})

@@ -56,14 +56,23 @@ async function buildValidRequest(
     rawBody?: Buffer
     timestampOverride?: number
   },
-): Promise<{ pubkey: string; timestamp: string; signature: string; rawBody?: Buffer }> {
+): Promise<{
+  pubkey: string
+  timestamp: string
+  signature: string
+  rawBody?: Buffer
+}> {
   const method = (opts?.method ?? 'GET').toUpperCase()
   const url = opts?.url ?? '/v1/users/me/currency'
   const timestamp = String(opts?.timestampOverride ?? Date.now())
   const rawBody = opts?.rawBody
 
   let bodyHash = ''
-  if (['POST', 'PATCH', 'PUT'].includes(method) && rawBody && rawBody.length > 0) {
+  if (
+    ['POST', 'PATCH', 'PUT'].includes(method) &&
+    rawBody &&
+    rawBody.length > 0
+  ) {
     bodyHash = sha256Hex(rawBody)
   }
 
@@ -130,7 +139,9 @@ describe('SparkSignatureGuard', () => {
 
     jest.clearAllMocks()
     mockConfigService.get.mockReturnValue(undefined)
-    mockPrismaService.lightningName.findFirst.mockResolvedValue(mockLightningName)
+    mockPrismaService.lightningName.findFirst.mockResolvedValue(
+      mockLightningName,
+    )
     // Default: signature is valid
     mockVerifySignature.mockResolvedValue(true)
   })
@@ -276,10 +287,13 @@ describe('SparkSignatureGuard', () => {
     // verifySignature returns false when the canonical message doesn't match
     mockVerifySignature.mockResolvedValue(false)
 
-    const { pubkey, timestamp, signature } = await buildValidRequest(privateKey, {
-      method: 'POST',
-      rawBody: Buffer.from('{"currency":"SATS"}'),
-    })
+    const { pubkey, timestamp, signature } = await buildValidRequest(
+      privateKey,
+      {
+        method: 'POST',
+        rawBody: Buffer.from('{"currency":"SATS"}'),
+      },
+    )
 
     // Guard receives a different (tampered) body
     const ctx = makeContext(
@@ -298,10 +312,13 @@ describe('SparkSignatureGuard', () => {
 
   it('valid POST with body → passes and populates request.user', async () => {
     const body = Buffer.from('{"currency":"SATS"}')
-    const { pubkey, timestamp, signature } = await buildValidRequest(privateKey, {
-      method: 'POST',
-      rawBody: body,
-    })
+    const { pubkey, timestamp, signature } = await buildValidRequest(
+      privateKey,
+      {
+        method: 'POST',
+        rawBody: body,
+      },
+    )
 
     const ctx = makeContext(
       {
@@ -321,7 +338,10 @@ describe('SparkSignatureGuard', () => {
 
   it('canonical message includes query string from originalUrl', async () => {
     const url = '/v1/things?q=A&sort=desc'
-    const { pubkey, timestamp, signature } = await buildValidRequest(privateKey, { url })
+    const { pubkey, timestamp, signature } = await buildValidRequest(
+      privateKey,
+      { url },
+    )
 
     const ctx = makeContext(
       {
@@ -339,6 +359,139 @@ describe('SparkSignatureGuard', () => {
     expect(passedMessage).toBe(`GET:${url}:${timestamp}:`)
   })
 
+  // ── replay protection ───────────────────────────────────────────────────────
+
+  describe('replay protection', () => {
+    it('rejects the same signature a second time', async () => {
+      const { pubkey, timestamp, signature } =
+        await buildValidRequest(privateKey)
+      const headers = {
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': signature,
+      }
+
+      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
+        UnauthorizedException,
+      )
+    })
+
+    it('allows a fresh signature from the same pubkey', async () => {
+      const first = await buildValidRequest(privateKey, {
+        timestampOverride: Date.now() - 1000,
+      })
+      const second = await buildValidRequest(privateKey)
+
+      await expect(
+        guard.canActivate(
+          makeContext({
+            'x-auth-pubkey': first.pubkey,
+            'x-auth-timestamp': first.timestamp,
+            'x-auth-signature': first.signature,
+          }),
+        ),
+      ).resolves.toBe(true)
+
+      await expect(
+        guard.canActivate(
+          makeContext({
+            'x-auth-pubkey': second.pubkey,
+            'x-auth-timestamp': second.timestamp,
+            'x-auth-signature': second.signature,
+          }),
+        ),
+      ).resolves.toBe(true)
+    })
+
+    it('does not cache signatures that failed verification', async () => {
+      const { pubkey, timestamp, signature } =
+        await buildValidRequest(privateKey)
+      const headers = {
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': signature,
+      }
+
+      mockVerifySignature.mockResolvedValueOnce(false)
+      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
+        UnauthorizedException,
+      )
+
+      // Same request now verifies: it must be treated as first use, not a replay.
+      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+    })
+
+    it('rejects a replay of a state-changing PATCH', async () => {
+      const rawBody = Buffer.from(JSON.stringify({ username: 'bob' }), 'utf8')
+      const url = '/v1/users/me/username'
+      const { pubkey, timestamp, signature } = await buildValidRequest(
+        privateKey,
+        {
+          method: 'PATCH',
+          url,
+          rawBody,
+        },
+      )
+      const headers = {
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': signature,
+      }
+
+      await expect(
+        guard.canActivate(
+          makeContext(headers, { method: 'PATCH', url, rawBody }),
+        ),
+      ).resolves.toBe(true)
+      await expect(
+        guard.canActivate(
+          makeContext(headers, { method: 'PATCH', url, rawBody }),
+        ),
+      ).rejects.toThrow(UnauthorizedException)
+    })
+
+    it('prunes remembered signatures once they fall outside the skew window', async () => {
+      const first = await buildValidRequest(privateKey)
+
+      await expect(
+        guard.canActivate(
+          makeContext({
+            'x-auth-pubkey': first.pubkey,
+            'x-auth-timestamp': first.timestamp,
+            'x-auth-signature': first.signature,
+          }),
+        ),
+      ).resolves.toBe(true)
+
+      const cache = (
+        guard as unknown as { seenSignatures: Map<string, number> }
+      ).seenSignatures
+      expect(cache.size).toBe(1)
+
+      // A later request prunes what can no longer be replayed: past the skew
+      // window the timestamp check rejects those on its own.
+      const realNow = Date.now
+      Date.now = () => realNow() + 61_000
+      try {
+        const later = await buildValidRequest(privateKey)
+        await expect(
+          guard.canActivate(
+            makeContext({
+              'x-auth-pubkey': later.pubkey,
+              'x-auth-timestamp': later.timestamp,
+              'x-auth-signature': later.signature,
+            }),
+          ),
+        ).resolves.toBe(true)
+      } finally {
+        Date.now = realNow
+      }
+
+      expect(cache.size).toBe(1)
+    })
+  })
+
   // ── AUTH_MAX_SKEW_MS parsing (constructor-time) ─────────────────────────────
 
   describe('AUTH_MAX_SKEW_MS parsing', () => {
@@ -353,12 +506,17 @@ describe('SparkSignatureGuard', () => {
       return module.get<SparkSignatureGuard>(SparkSignatureGuard)
     }
 
-    async function skewFor(g: SparkSignatureGuard, tsOffsetMs: number): Promise<boolean> {
+    async function skewFor(
+      g: SparkSignatureGuard,
+      tsOffsetMs: number,
+    ): Promise<boolean> {
       const pk = new Uint8Array(randomBytes(32))
       const pkHex = Buffer.from(getPublicKey(pk, true)).toString('hex')
       mockLightningName.linkingPubKeyHex = pkHex
       const targetTs = Date.now() - tsOffsetMs
-      const { pubkey, signature } = await buildValidRequest(pk, { timestampOverride: targetTs })
+      const { pubkey, signature } = await buildValidRequest(pk, {
+        timestampOverride: targetTs,
+      })
       const ctx = makeContext({
         'x-auth-pubkey': pubkey,
         'x-auth-timestamp': String(targetTs),
@@ -388,7 +546,9 @@ describe('SparkSignatureGuard', () => {
     })
 
     it('logs warning and falls back to default for non-numeric env value', async () => {
-      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
       const g = await buildGuardWith('not-a-number')
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('AUTH_MAX_SKEW_MS="not-a-number"'),
@@ -399,9 +559,13 @@ describe('SparkSignatureGuard', () => {
     })
 
     it('logs warning and falls back to default for non-positive env value', async () => {
-      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
       await buildGuardWith('0')
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('AUTH_MAX_SKEW_MS="0"'))
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('AUTH_MAX_SKEW_MS="0"'),
+      )
       warn.mockRestore()
     })
   })
