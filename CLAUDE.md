@@ -74,7 +74,7 @@ docker-compose.yml       mysql (3308), mysql-test (3309, --profile test)
   row and activates (or creates) another; retired rows are never deleted, so the `username` unique
   index keeps a retired name permanently unavailable to everyone. Every read path must filter
   `active: true`. Quota is DERIVED (`rows - 1`), never stored; only the ceiling
-  (`User.bonusUsernameChanges`) is persisted. See `docs/username-change.html`.
+  (`User.bonusUsernameChanges`) is persisted.
 - **`activePubKey` mirrors `linkingPubKeyHex` while active, `NULL` once retired.** It replaces the
   old `@unique` on `linkingPubKeyHex` (which now allows repeats) and enforces one active name per
   pubkey. Always write it in the same statement that flips `active`, and deactivate before
