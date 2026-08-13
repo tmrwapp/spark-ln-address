@@ -194,20 +194,21 @@ DROP INDEX `lightning_names_linkingPubKeyHex_key` ON `lightning_names`;
 CREATE INDEX `lightning_names_linkingPubKeyHex_idx` ON `lightning_names`(`linkingPubKeyHex`);
 CREATE INDEX `lightning_names_userId_idx` ON `lightning_names`(`userId`);
 
--- 2. Re-establish "one active name per pubkey" (Option A)
+-- 2. Re-establish "one active name per pubkey" (Option A), plus audit timestamps.
+--    Existing rows get the migration time for `createdAt`.
 ALTER TABLE `lightning_names`
-  ADD COLUMN `activePubKey` VARCHAR(191)
-    GENERATED ALWAYS AS (IF(`active`, `linkingPubKeyHex`, NULL)) STORED;
+  ADD COLUMN `activePubKey` VARCHAR(191) NULL,
+  ADD COLUMN `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  ADD COLUMN `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3);
+
+-- Backfill before the index exists: every pre-existing row is active and is the
+-- only row for its pubkey.
+UPDATE `lightning_names` SET `activePubKey` = `linkingPubKeyHex` WHERE `active` = 1;
 
 CREATE UNIQUE INDEX `lightning_names_activePubKey_key`
   ON `lightning_names`(`activePubKey`);
 
--- 3. Audit timestamps (existing rows get the migration time)
-ALTER TABLE `lightning_names`
-  ADD COLUMN `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  ADD COLUMN `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3);
-
--- 4. Support-grantable ceiling
+-- 3. Support-grantable ceiling
 ALTER TABLE `users`
   ADD COLUMN `bonusUsernameChanges` INT NOT NULL DEFAULT 0;
 ```
@@ -307,7 +308,7 @@ One transaction, five checks. `UsernameService.changeUsername(userId, rawUsernam
    the existing target row to `active: true` or insert a new row with the same `linkingPubKeyHex`.
    Catch Prisma `P2002` and map it to `409 USERNAME_TAKEN`, which closes the check-then-act window.
 
-> **Order matters.** Deactivate before activating. With the generated-column unique index in place,
+> **Order matters.** Deactivate before activating. With the `activePubKey` unique index in place,
 > activating first would momentarily leave two active rows carrying the same pubkey and the
 > statement would fail.
 
