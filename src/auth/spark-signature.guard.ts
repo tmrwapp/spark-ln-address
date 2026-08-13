@@ -49,9 +49,8 @@ export class SparkSignatureGuard implements CanActivate {
    * only fill the flooder's own bucket, so no amount of traffic from one key can
    * push another key's signature out of the cache and reopen the replay window.
    *
-   * A Map preserves insertion order and every entry in a bucket shares the same
-   * lifetime, so the oldest key is always the first to expire and pruning can
-   * stop at the first live entry.
+   * Entries expire relative to the timestamp they carry, so a bucket is scanned
+   * in full when pruned; REPLAY_CACHE_MAX_PER_PUBKEY bounds what that costs.
    *
    * This is process-local. PM2 runs a single fork instance today
    * (ecosystem.config.cjs), so it covers every request. Scaling to more than one
@@ -152,7 +151,11 @@ export class SparkSignatureGuard implements CanActivate {
 
   /**
    * Throws when this exact signature has already been accepted, and otherwise
-   * records it until it falls outside the skew window.
+   * records it for as long as it could still be presented again.
+   *
+   * `timestamp` arrives as the raw header, which is what the client signed and
+   * so what the digest has to cover. Callers must have passed it through the
+   * skew check first, which is what makes parsing it here safe.
    */
   private rejectReplay(
     pubkey: string,
@@ -160,6 +163,7 @@ export class SparkSignatureGuard implements CanActivate {
     signature: string,
   ): void {
     const now = Date.now()
+    const signedAtMs = Number(timestamp)
 
     if (this.seenSignatures.size > REPLAY_CACHE_SWEEP_THRESHOLD) {
       this.sweepSeenSignatures(now)
@@ -189,21 +193,29 @@ export class SparkSignatureGuard implements CanActivate {
       throw new UnauthorizedException('Too many signatures in flight')
     }
 
-    // Once the timestamp leaves the skew window the skew check rejects the
-    // request on its own, so remembering it any longer adds nothing.
-    bucket.set(key, now + this.maxSkewMs)
+    // Expiry is derived from the signed timestamp, not from now. The skew check
+    // accepts a signature anywhere in [ts - skew, ts + skew], so anchoring to
+    // acceptance time would drop it at `now + skew` while it stayed presentable
+    // until `ts + skew` — a client whose clock runs fast opens exactly that gap.
+    // Past `ts + skew` the skew check rejects the request on its own, so
+    // remembering it any longer adds nothing.
+    bucket.set(key, signedAtMs + this.maxSkewMs)
   }
 
   /**
-   * Drops expired entries from one bucket. All entries share one lifetime, so
-   * insertion order is expiry order and the scan can stop at the first live one.
+   * Drops expired entries from one bucket. Expiry follows the signed timestamp
+   * rather than insertion time, so entries do not expire in insertion order and
+   * the scan cannot stop early. A bucket holds at most
+   * REPLAY_CACHE_MAX_PER_PUBKEY entries, which bounds the cost.
+   *
+   * An entry is kept while `now` is still within its window: at exactly
+   * `expiresAt` the skew check would admit the signature, so it has to stay.
    */
   private pruneBucket(bucket: Map<string, number>, now: number): void {
     for (const [key, expiresAt] of bucket) {
-      if (expiresAt > now) {
-        break
+      if (expiresAt < now) {
+        bucket.delete(key)
       }
-      bucket.delete(key)
     }
   }
 

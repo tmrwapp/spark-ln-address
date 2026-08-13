@@ -493,6 +493,34 @@ describe('SparkSignatureGuard', () => {
       expect(cache.get(first.pubkey.toLowerCase()).size).toBe(1)
     })
 
+    it('remembers a signature for as long as the skew check would admit it', async () => {
+      // Client clock runs 59s fast. The skew check accepts the signature from
+      // now until ts + 60s, so the cache has to hold it that long too —
+      // expiring at acceptance + 60s would leave a window where the replay is
+      // still admissible but no longer remembered.
+      const base = Date.now()
+      const req = await buildValidRequest(privateKey, {
+        timestampOverride: base + 59_000,
+      })
+      const headers = {
+        'x-auth-pubkey': req.pubkey,
+        'x-auth-timestamp': req.timestamp,
+        'x-auth-signature': req.signature,
+      }
+
+      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+
+      const realNow = Date.now
+      Date.now = () => base + 61_000
+      try {
+        await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
+          UnauthorizedException,
+        )
+      } finally {
+        Date.now = realNow
+      }
+    })
+
     it('does not cache signatures from a pubkey with no active name', async () => {
       const { pubkey, timestamp, signature } =
         await buildValidRequest(privateKey)
