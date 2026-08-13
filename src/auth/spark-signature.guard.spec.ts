@@ -465,9 +465,11 @@ describe('SparkSignatureGuard', () => {
       ).resolves.toBe(true)
 
       const cache = (
-        guard as unknown as { seenSignatures: Map<string, number> }
+        guard as unknown as {
+          seenSignatures: Map<string, Map<string, number>>
+        }
       ).seenSignatures
-      expect(cache.size).toBe(1)
+      expect(cache.get(first.pubkey.toLowerCase()).size).toBe(1)
 
       // A later request prunes what can no longer be replayed: past the skew
       // window the timestamp check rejects those on its own.
@@ -488,7 +490,119 @@ describe('SparkSignatureGuard', () => {
         Date.now = realNow
       }
 
-      expect(cache.size).toBe(1)
+      expect(cache.get(first.pubkey.toLowerCase()).size).toBe(1)
+    })
+
+    it('does not cache signatures from a pubkey with no active name', async () => {
+      const { pubkey, timestamp, signature } =
+        await buildValidRequest(privateKey)
+      const headers = {
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': signature,
+      }
+
+      // A valid signature over a throwaway keypair verifies but resolves to no
+      // user. Caching it would let anyone occupy the cache for free.
+      mockPrismaService.lightningName.findFirst.mockResolvedValueOnce(null)
+      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
+        UnauthorizedException,
+      )
+
+      const cache = (
+        guard as unknown as {
+          seenSignatures: Map<string, Map<string, number>>
+        }
+      ).seenSignatures
+      expect(cache.size).toBe(0)
+    })
+
+    it('rejects a pubkey that exceeds its own cache budget', async () => {
+      // One over the cap: the last request has nowhere to be remembered, so it
+      // must be refused rather than silently going unprotected. Timestamps are
+      // taken from a fixed base so no two requests sign the same message.
+      const base = Date.now()
+      for (let i = 0; i < 200; i++) {
+        const req = await buildValidRequest(privateKey, {
+          timestampOverride: base - i,
+        })
+        await expect(
+          guard.canActivate(
+            makeContext({
+              'x-auth-pubkey': req.pubkey,
+              'x-auth-timestamp': req.timestamp,
+              'x-auth-signature': req.signature,
+            }),
+          ),
+        ).resolves.toBe(true)
+      }
+
+      const overflow = await buildValidRequest(privateKey, {
+        timestampOverride: base - 200,
+      })
+      await expect(
+        guard.canActivate(
+          makeContext({
+            'x-auth-pubkey': overflow.pubkey,
+            'x-auth-timestamp': overflow.timestamp,
+            'x-auth-signature': overflow.signature,
+          }),
+        ),
+      ).rejects.toThrow(UnauthorizedException)
+    })
+
+    it('does not let one pubkey flood another pubkey out of the cache', async () => {
+      const victimKey = new Uint8Array(randomBytes(32))
+      const victimPubkey = Buffer.from(getPublicKey(victimKey, true)).toString(
+        'hex',
+      )
+      const victim = await buildValidRequest(victimKey)
+      const victimHeaders = {
+        'x-auth-pubkey': victim.pubkey,
+        'x-auth-timestamp': victim.timestamp,
+        'x-auth-signature': victim.signature,
+      }
+
+      // findFirst is keyed off the header, so both pubkeys resolve to a user.
+      mockPrismaService.lightningName.findFirst.mockImplementation(
+        ({ where }) => ({
+          ...mockLightningName,
+          linkingPubKeyHex: where.linkingPubKeyHex,
+        }),
+      )
+
+      await expect(guard.canActivate(makeContext(victimHeaders))).resolves.toBe(
+        true,
+      )
+
+      // The attacker burns their whole budget; the victim's entry is in another
+      // bucket and cannot be evicted by it.
+      const base = Date.now()
+      for (let i = 0; i < 200; i++) {
+        const flood = await buildValidRequest(privateKey, {
+          timestampOverride: base - i,
+        })
+        await guard
+          .canActivate(
+            makeContext({
+              'x-auth-pubkey': flood.pubkey,
+              'x-auth-timestamp': flood.timestamp,
+              'x-auth-signature': flood.signature,
+            }),
+          )
+          .catch(() => undefined)
+      }
+
+      await expect(
+        guard.canActivate(makeContext(victimHeaders)),
+      ).rejects.toThrow(UnauthorizedException)
+
+      const cache = (
+        guard as unknown as {
+          seenSignatures: Map<string, Map<string, number>>
+        }
+      ).seenSignatures
+      expect(cache.get(victimPubkey.toLowerCase()).size).toBe(1)
     })
   })
 

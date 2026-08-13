@@ -14,11 +14,21 @@ import type { Request } from 'express'
 const DEFAULT_MAX_SKEW_MS = 60000
 
 /**
- * Hard cap on remembered signatures. Entries expire after maxSkewMs, so this is
- * only reached under a flood; evicting the oldest then is preferable to growing
- * without bound.
+ * Hard cap on remembered signatures per pubkey. Entries expire after maxSkewMs,
+ * so an honest client stays far below it and only a flood reaches it. Requests
+ * over the cap are rejected rather than evicting a live entry: dropping one
+ * early would silently disable replay protection for the signature it belonged
+ * to, which is exactly what an attacker would want.
  */
-const REPLAY_CACHE_MAX_ENTRIES = 10000
+const REPLAY_CACHE_MAX_PER_PUBKEY = 200
+
+/**
+ * Number of pubkey buckets that triggers a full sweep. Buckets are pruned when
+ * their pubkey next authenticates, so one that goes quiet lingers empty; the
+ * sweep collects those. Entries live at most maxSkewMs, so a sweep almost
+ * always clears nearly everything.
+ */
+const REPLAY_CACHE_SWEEP_THRESHOLD = 10000
 
 @Injectable()
 export class SparkSignatureGuard implements CanActivate {
@@ -26,25 +36,29 @@ export class SparkSignatureGuard implements CanActivate {
   private readonly maxSkewMs: number
 
   /**
-   * Signatures already accepted, keyed by a digest of the auth triple and mapped
-   * to their expiry. A valid client never repeats one, because the timestamp is
-   * part of the signed message.
+   * Signatures already accepted, bucketed by pubkey: each bucket maps a digest
+   * of the auth triple to its expiry. A valid client never repeats one, because
+   * the timestamp is part of the signed message.
    *
    * Required by the username endpoints: PATCH /v1/users/me/username is NOT
    * idempotent, so a request captured inside the skew window could otherwise be
    * replayed to spend another unit of the change quota, or to flip the user's
    * active name once the quota is gone.
    *
-   * A Map preserves insertion order and every entry shares the same lifetime, so
-   * the oldest key is always the first to expire and pruning can stop at the
-   * first live entry.
+   * Bucketing per pubkey is what keeps that guarantee under load: a flood can
+   * only fill the flooder's own bucket, so no amount of traffic from one key can
+   * push another key's signature out of the cache and reopen the replay window.
+   *
+   * A Map preserves insertion order and every entry in a bucket shares the same
+   * lifetime, so the oldest key is always the first to expire and pruning can
+   * stop at the first live entry.
    *
    * This is process-local. PM2 runs a single fork instance today
    * (ecosystem.config.cjs), so it covers every request. Scaling to more than one
    * instance or replica would silently weaken it and the cache would have to move
    * to shared storage.
    */
-  private readonly seenSignatures = new Map<string, number>()
+  private readonly seenSignatures = new Map<string, Map<string, number>>()
 
   constructor(
     private readonly prisma: PrismaService,
@@ -115,11 +129,7 @@ export class SparkSignatureGuard implements CanActivate {
       throw new UnauthorizedException('Invalid signature')
     }
 
-    // 6. Reject replays of an already-accepted signature. Runs after
-    // verification so that unverified traffic cannot fill the cache.
-    this.rejectReplay(normalizedPubkey, timestamp, signature)
-
-    // 7. Look up user by linkingPubKeyHex
+    // 6. Look up user by linkingPubKeyHex
     const lightningName = await this.prisma.lightningName.findFirst({
       where: { linkingPubKeyHex: normalizedPubkey, active: true },
       include: { user: true },
@@ -128,6 +138,11 @@ export class SparkSignatureGuard implements CanActivate {
     if (!lightningName) {
       throw new UnauthorizedException('Unknown pubkey')
     }
+
+    // 7. Reject replays of an already-accepted signature. Runs last so that only
+    // traffic from a known account can occupy the cache: a valid signature over
+    // a throwaway keypair proves nothing and must not be allowed to fill it.
+    this.rejectReplay(normalizedPubkey, timestamp, signature)
 
     // 8. Attach resolved user to request
     req.user = lightningName.user
@@ -145,39 +160,62 @@ export class SparkSignatureGuard implements CanActivate {
     signature: string,
   ): void {
     const now = Date.now()
-    this.pruneSeenSignatures(now)
+
+    if (this.seenSignatures.size > REPLAY_CACHE_SWEEP_THRESHOLD) {
+      this.sweepSeenSignatures(now)
+    }
+
+    let bucket = this.seenSignatures.get(pubkey)
+    if (bucket) {
+      this.pruneBucket(bucket, now)
+    } else {
+      bucket = new Map<string, number>()
+      this.seenSignatures.set(pubkey, bucket)
+    }
 
     const key = createHash('sha256')
-      .update(`${pubkey}:${timestamp}:${signature}`)
+      .update(`${timestamp}:${signature}`)
       .digest('hex')
 
-    if (this.seenSignatures.has(key)) {
+    if (bucket.has(key)) {
       this.logger.warn(`Replayed signature rejected for pubkey ${pubkey}`)
       throw new UnauthorizedException('Signature already used')
     }
 
+    // Refusing to remember one more signature would mean not being able to
+    // detect its replay, so reject instead. Only this pubkey is affected.
+    if (bucket.size >= REPLAY_CACHE_MAX_PER_PUBKEY) {
+      this.logger.warn(`Replay cache full for pubkey ${pubkey}`)
+      throw new UnauthorizedException('Too many signatures in flight')
+    }
+
     // Once the timestamp leaves the skew window the skew check rejects the
     // request on its own, so remembering it any longer adds nothing.
-    this.seenSignatures.set(key, now + this.maxSkewMs)
+    bucket.set(key, now + this.maxSkewMs)
+  }
 
-    if (this.seenSignatures.size > REPLAY_CACHE_MAX_ENTRIES) {
-      const oldest = this.seenSignatures.keys().next()
-      if (!oldest.done) {
-        this.seenSignatures.delete(oldest.value)
+  /**
+   * Drops expired entries from one bucket. All entries share one lifetime, so
+   * insertion order is expiry order and the scan can stop at the first live one.
+   */
+  private pruneBucket(bucket: Map<string, number>, now: number): void {
+    for (const [key, expiresAt] of bucket) {
+      if (expiresAt > now) {
+        break
       }
+      bucket.delete(key)
     }
   }
 
   /**
-   * Drops expired entries. All entries share one lifetime, so insertion order is
-   * expiry order and the scan can stop at the first live entry.
+   * Prunes every bucket and drops those left empty.
    */
-  private pruneSeenSignatures(now: number): void {
-    for (const [key, expiresAt] of this.seenSignatures) {
-      if (expiresAt > now) {
-        break
+  private sweepSeenSignatures(now: number): void {
+    for (const [pubkey, bucket] of this.seenSignatures) {
+      this.pruneBucket(bucket, now)
+      if (bucket.size === 0) {
+        this.seenSignatures.delete(pubkey)
       }
-      this.seenSignatures.delete(key)
     }
   }
 }
