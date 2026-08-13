@@ -30,6 +30,19 @@ const REPLAY_CACHE_MAX_PER_PUBKEY = 200
  */
 const REPLAY_CACHE_SWEEP_THRESHOLD = 10000
 
+/**
+ * Methods exempt from replay rejection. Re-sending a read is something clients
+ * legitimately do — a retry after a dropped response is the obvious case — and
+ * a replayed read returns exactly what a fresh one would, so there is nothing
+ * to protect. Listing the exempt methods rather than the protected ones means
+ * anything new defaults to protected.
+ *
+ * The corollary is that signed GET/HEAD handlers must stay free of side
+ * effects; one that issues a token or consumes a single-use code would need
+ * replay protection and would no longer be safe to exempt here.
+ */
+const REPLAY_EXEMPT_METHODS = ['GET', 'HEAD']
+
 @Injectable()
 export class SparkSignatureGuard implements CanActivate {
   private readonly logger = new Logger(SparkSignatureGuard.name)
@@ -138,10 +151,13 @@ export class SparkSignatureGuard implements CanActivate {
       throw new UnauthorizedException('Unknown pubkey')
     }
 
-    // 7. Reject replays of an already-accepted signature. Runs last so that only
-    // traffic from a known account can occupy the cache: a valid signature over
-    // a throwaway keypair proves nothing and must not be allowed to fill it.
-    this.rejectReplay(normalizedPubkey, timestamp, signature)
+    // 7. Reject replays of an already-accepted signature, for the methods that
+    // can be harmed by one. Runs last so that only traffic from a known account
+    // can occupy the cache: a valid signature over a throwaway keypair proves
+    // nothing and must not be allowed to fill it.
+    if (!REPLAY_EXEMPT_METHODS.includes(method)) {
+      this.rejectReplay(normalizedPubkey, timestamp, signature)
+    }
 
     // 8. Attach resolved user to request
     req.user = lightningName.user

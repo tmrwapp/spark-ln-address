@@ -362,51 +362,72 @@ describe('SparkSignatureGuard', () => {
   // ── replay protection ───────────────────────────────────────────────────────
 
   describe('replay protection', () => {
+    // The cache only covers non-idempotent methods, so these exercise PATCH.
+    // GET/HEAD exemption is covered in its own block below.
+    const patchOpts = {
+      method: 'PATCH',
+      url: '/v1/users/me/username',
+      rawBody: Buffer.from(JSON.stringify({ username: 'bob' }), 'utf8'),
+    }
+
     it('rejects the same signature a second time', async () => {
-      const { pubkey, timestamp, signature } =
-        await buildValidRequest(privateKey)
+      const { pubkey, timestamp, signature } = await buildValidRequest(
+        privateKey,
+        patchOpts,
+      )
       const headers = {
         'x-auth-pubkey': pubkey,
         'x-auth-timestamp': timestamp,
         'x-auth-signature': signature,
       }
 
-      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
-      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
-        UnauthorizedException,
-      )
+      await expect(
+        guard.canActivate(makeContext(headers, patchOpts)),
+      ).resolves.toBe(true)
+      await expect(
+        guard.canActivate(makeContext(headers, patchOpts)),
+      ).rejects.toThrow(UnauthorizedException)
     })
 
     it('allows a fresh signature from the same pubkey', async () => {
       const first = await buildValidRequest(privateKey, {
+        ...patchOpts,
         timestampOverride: Date.now() - 1000,
       })
-      const second = await buildValidRequest(privateKey)
+      const second = await buildValidRequest(privateKey, patchOpts)
 
       await expect(
         guard.canActivate(
-          makeContext({
-            'x-auth-pubkey': first.pubkey,
-            'x-auth-timestamp': first.timestamp,
-            'x-auth-signature': first.signature,
-          }),
+          makeContext(
+            {
+              'x-auth-pubkey': first.pubkey,
+              'x-auth-timestamp': first.timestamp,
+              'x-auth-signature': first.signature,
+            },
+            patchOpts,
+          ),
         ),
       ).resolves.toBe(true)
 
       await expect(
         guard.canActivate(
-          makeContext({
-            'x-auth-pubkey': second.pubkey,
-            'x-auth-timestamp': second.timestamp,
-            'x-auth-signature': second.signature,
-          }),
+          makeContext(
+            {
+              'x-auth-pubkey': second.pubkey,
+              'x-auth-timestamp': second.timestamp,
+              'x-auth-signature': second.signature,
+            },
+            patchOpts,
+          ),
         ),
       ).resolves.toBe(true)
     })
 
     it('does not cache signatures that failed verification', async () => {
-      const { pubkey, timestamp, signature } =
-        await buildValidRequest(privateKey)
+      const { pubkey, timestamp, signature } = await buildValidRequest(
+        privateKey,
+        patchOpts,
+      )
       const headers = {
         'x-auth-pubkey': pubkey,
         'x-auth-timestamp': timestamp,
@@ -414,53 +435,29 @@ describe('SparkSignatureGuard', () => {
       }
 
       mockVerifySignature.mockResolvedValueOnce(false)
-      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
-        UnauthorizedException,
-      )
+      await expect(
+        guard.canActivate(makeContext(headers, patchOpts)),
+      ).rejects.toThrow(UnauthorizedException)
 
       // Same request now verifies: it must be treated as first use, not a replay.
-      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
-    })
-
-    it('rejects a replay of a state-changing PATCH', async () => {
-      const rawBody = Buffer.from(JSON.stringify({ username: 'bob' }), 'utf8')
-      const url = '/v1/users/me/username'
-      const { pubkey, timestamp, signature } = await buildValidRequest(
-        privateKey,
-        {
-          method: 'PATCH',
-          url,
-          rawBody,
-        },
-      )
-      const headers = {
-        'x-auth-pubkey': pubkey,
-        'x-auth-timestamp': timestamp,
-        'x-auth-signature': signature,
-      }
-
       await expect(
-        guard.canActivate(
-          makeContext(headers, { method: 'PATCH', url, rawBody }),
-        ),
+        guard.canActivate(makeContext(headers, patchOpts)),
       ).resolves.toBe(true)
-      await expect(
-        guard.canActivate(
-          makeContext(headers, { method: 'PATCH', url, rawBody }),
-        ),
-      ).rejects.toThrow(UnauthorizedException)
     })
 
     it('prunes remembered signatures once they fall outside the skew window', async () => {
-      const first = await buildValidRequest(privateKey)
+      const first = await buildValidRequest(privateKey, patchOpts)
 
       await expect(
         guard.canActivate(
-          makeContext({
-            'x-auth-pubkey': first.pubkey,
-            'x-auth-timestamp': first.timestamp,
-            'x-auth-signature': first.signature,
-          }),
+          makeContext(
+            {
+              'x-auth-pubkey': first.pubkey,
+              'x-auth-timestamp': first.timestamp,
+              'x-auth-signature': first.signature,
+            },
+            patchOpts,
+          ),
         ),
       ).resolves.toBe(true)
 
@@ -476,14 +473,17 @@ describe('SparkSignatureGuard', () => {
       const realNow = Date.now
       Date.now = () => realNow() + 61_000
       try {
-        const later = await buildValidRequest(privateKey)
+        const later = await buildValidRequest(privateKey, patchOpts)
         await expect(
           guard.canActivate(
-            makeContext({
-              'x-auth-pubkey': later.pubkey,
-              'x-auth-timestamp': later.timestamp,
-              'x-auth-signature': later.signature,
-            }),
+            makeContext(
+              {
+                'x-auth-pubkey': later.pubkey,
+                'x-auth-timestamp': later.timestamp,
+                'x-auth-signature': later.signature,
+              },
+              patchOpts,
+            ),
           ),
         ).resolves.toBe(true)
       } finally {
@@ -500,6 +500,7 @@ describe('SparkSignatureGuard', () => {
       // still admissible but no longer remembered.
       const base = Date.now()
       const req = await buildValidRequest(privateKey, {
+        ...patchOpts,
         timestampOverride: base + 59_000,
       })
       const headers = {
@@ -508,22 +509,26 @@ describe('SparkSignatureGuard', () => {
         'x-auth-signature': req.signature,
       }
 
-      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+      await expect(
+        guard.canActivate(makeContext(headers, patchOpts)),
+      ).resolves.toBe(true)
 
       const realNow = Date.now
       Date.now = () => base + 61_000
       try {
-        await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
-          UnauthorizedException,
-        )
+        await expect(
+          guard.canActivate(makeContext(headers, patchOpts)),
+        ).rejects.toThrow(UnauthorizedException)
       } finally {
         Date.now = realNow
       }
     })
 
     it('does not cache signatures from a pubkey with no active name', async () => {
-      const { pubkey, timestamp, signature } =
-        await buildValidRequest(privateKey)
+      const { pubkey, timestamp, signature } = await buildValidRequest(
+        privateKey,
+        patchOpts,
+      )
       const headers = {
         'x-auth-pubkey': pubkey,
         'x-auth-timestamp': timestamp,
@@ -533,9 +538,9 @@ describe('SparkSignatureGuard', () => {
       // A valid signature over a throwaway keypair verifies but resolves to no
       // user. Caching it would let anyone occupy the cache for free.
       mockPrismaService.lightningName.findFirst.mockResolvedValueOnce(null)
-      await expect(guard.canActivate(makeContext(headers))).rejects.toThrow(
-        UnauthorizedException,
-      )
+      await expect(
+        guard.canActivate(makeContext(headers, patchOpts)),
+      ).rejects.toThrow(UnauthorizedException)
 
       const cache = (
         guard as unknown as {
@@ -552,29 +557,37 @@ describe('SparkSignatureGuard', () => {
       const base = Date.now()
       for (let i = 0; i < 200; i++) {
         const req = await buildValidRequest(privateKey, {
+          ...patchOpts,
           timestampOverride: base - i,
         })
         await expect(
           guard.canActivate(
-            makeContext({
-              'x-auth-pubkey': req.pubkey,
-              'x-auth-timestamp': req.timestamp,
-              'x-auth-signature': req.signature,
-            }),
+            makeContext(
+              {
+                'x-auth-pubkey': req.pubkey,
+                'x-auth-timestamp': req.timestamp,
+                'x-auth-signature': req.signature,
+              },
+              patchOpts,
+            ),
           ),
         ).resolves.toBe(true)
       }
 
       const overflow = await buildValidRequest(privateKey, {
+        ...patchOpts,
         timestampOverride: base - 200,
       })
       await expect(
         guard.canActivate(
-          makeContext({
-            'x-auth-pubkey': overflow.pubkey,
-            'x-auth-timestamp': overflow.timestamp,
-            'x-auth-signature': overflow.signature,
-          }),
+          makeContext(
+            {
+              'x-auth-pubkey': overflow.pubkey,
+              'x-auth-timestamp': overflow.timestamp,
+              'x-auth-signature': overflow.signature,
+            },
+            patchOpts,
+          ),
         ),
       ).rejects.toThrow(UnauthorizedException)
     })
@@ -584,7 +597,7 @@ describe('SparkSignatureGuard', () => {
       const victimPubkey = Buffer.from(getPublicKey(victimKey, true)).toString(
         'hex',
       )
-      const victim = await buildValidRequest(victimKey)
+      const victim = await buildValidRequest(victimKey, patchOpts)
       const victimHeaders = {
         'x-auth-pubkey': victim.pubkey,
         'x-auth-timestamp': victim.timestamp,
@@ -599,30 +612,34 @@ describe('SparkSignatureGuard', () => {
         }),
       )
 
-      await expect(guard.canActivate(makeContext(victimHeaders))).resolves.toBe(
-        true,
-      )
+      await expect(
+        guard.canActivate(makeContext(victimHeaders, patchOpts)),
+      ).resolves.toBe(true)
 
       // The attacker burns their whole budget; the victim's entry is in another
       // bucket and cannot be evicted by it.
       const base = Date.now()
       for (let i = 0; i < 200; i++) {
         const flood = await buildValidRequest(privateKey, {
+          ...patchOpts,
           timestampOverride: base - i,
         })
         await guard
           .canActivate(
-            makeContext({
-              'x-auth-pubkey': flood.pubkey,
-              'x-auth-timestamp': flood.timestamp,
-              'x-auth-signature': flood.signature,
-            }),
+            makeContext(
+              {
+                'x-auth-pubkey': flood.pubkey,
+                'x-auth-timestamp': flood.timestamp,
+                'x-auth-signature': flood.signature,
+              },
+              patchOpts,
+            ),
           )
           .catch(() => undefined)
       }
 
       await expect(
-        guard.canActivate(makeContext(victimHeaders)),
+        guard.canActivate(makeContext(victimHeaders, patchOpts)),
       ).rejects.toThrow(UnauthorizedException)
 
       const cache = (
@@ -631,6 +648,56 @@ describe('SparkSignatureGuard', () => {
         }
       ).seenSignatures
       expect(cache.get(victimPubkey.toLowerCase()).size).toBe(1)
+    })
+  })
+
+  // ── idempotent methods are exempt ───────────────────────────────────────────
+
+  describe('replay exemption for idempotent methods', () => {
+    it('lets an identical GET be sent twice', async () => {
+      // A client retrying after a dropped response resends the request it
+      // already signed. Rejecting that would surface as a 401 — which clients
+      // read as bad credentials — for a read that changes nothing.
+      const { pubkey, timestamp, signature } =
+        await buildValidRequest(privateKey)
+      const headers = {
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': signature,
+      }
+
+      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+      await expect(guard.canActivate(makeContext(headers))).resolves.toBe(true)
+    })
+
+    it('spends no cache budget on GET or HEAD', async () => {
+      const get = await buildValidRequest(privateKey)
+      await guard.canActivate(
+        makeContext({
+          'x-auth-pubkey': get.pubkey,
+          'x-auth-timestamp': get.timestamp,
+          'x-auth-signature': get.signature,
+        }),
+      )
+
+      const head = await buildValidRequest(privateKey, { method: 'HEAD' })
+      await guard.canActivate(
+        makeContext(
+          {
+            'x-auth-pubkey': head.pubkey,
+            'x-auth-timestamp': head.timestamp,
+            'x-auth-signature': head.signature,
+          },
+          { method: 'HEAD' },
+        ),
+      )
+
+      const cache = (
+        guard as unknown as {
+          seenSignatures: Map<string, Map<string, number>>
+        }
+      ).seenSignatures
+      expect(cache.size).toBe(0)
     })
   })
 
