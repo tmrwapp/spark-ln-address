@@ -237,14 +237,89 @@ describe('UsernameService', () => {
       })
     })
 
-    it('does not disguise an activePubKey violation as a taken username', async () => {
+    it('maps a losing race on the activePubKey index to CHANGE_IN_PROGRESS', async () => {
+      // The winner moved this account somewhere else, so its active row already
+      // holds the pubkey. Reporting USERNAME_TAKEN would blame the wrong thing,
+      // and letting it escape would surface a 500 for an ordinary conflict.
       mockPrismaService.$transaction.mockRejectedValue(
         uniqueViolation('activePubKey'),
       )
 
       await expect(
         service.changeUsername('user-1', 'bob'),
-      ).rejects.not.toBeInstanceOf(ConflictException)
+      ).rejects.toMatchObject({
+        response: { code: 'CHANGE_IN_PROGRESS' },
+      })
+    })
+
+    it('returns success when a concurrent request already made this change', async () => {
+      // Double-tapped save: both requests read the pre-change state, the winner
+      // creates `bob`, and the loser collides on the username index. The change
+      // the caller asked for did happen, so an error would be false — and would
+      // push the client into spending another unit of quota on a different name.
+      mockPrismaService.lightningName.findMany
+        .mockResolvedValueOnce([makeRow()])
+        .mockResolvedValueOnce([
+          makeRow({ id: 'ln-bob', username: 'bob' }),
+          makeRow({ active: false, activePubKey: null }),
+        ])
+      mockPrismaService.$transaction.mockRejectedValue(
+        uniqueViolation('username'),
+      )
+
+      await expect(service.changeUsername('user-1', 'bob')).resolves.toEqual({
+        username: 'bob',
+        lightningAddress: 'bob@guap.to',
+        changesUsed: 1,
+        changesLimit: 2,
+        changesRemaining: 1,
+        switchedBack: false,
+      })
+    })
+
+    it('returns success when the advisory check finds the winner already landed it', async () => {
+      // Same race, but the winner commits before this request's availability
+      // check rather than during its transaction. The row it finds belongs to
+      // this account, so it is not evidence the name is unavailable.
+      mockPrismaService.lightningName.findMany
+        .mockResolvedValueOnce([makeRow()])
+        .mockResolvedValueOnce([
+          makeRow({ id: 'ln-bob', username: 'bob' }),
+          makeRow({ active: false, activePubKey: null }),
+        ])
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(
+        makeRow({ id: 'ln-bob', username: 'bob', userId: 'user-1' }),
+      )
+
+      await expect(service.changeUsername('user-1', 'bob')).resolves.toEqual({
+        username: 'bob',
+        lightningAddress: 'bob@guap.to',
+        changesUsed: 1,
+        changesLimit: 2,
+        changesRemaining: 1,
+        switchedBack: false,
+      })
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled()
+    })
+
+    it('still reports a conflict when the winner landed on a different name', async () => {
+      // Convergence must not swallow a real conflict: this account is now on
+      // `carol`, which is not what the caller asked for.
+      mockPrismaService.lightningName.findMany
+        .mockResolvedValueOnce([makeRow()])
+        .mockResolvedValueOnce([
+          makeRow({ id: 'ln-carol', username: 'carol' }),
+          makeRow({ active: false, activePubKey: null }),
+        ])
+      mockPrismaService.$transaction.mockRejectedValue(
+        uniqueViolation('activePubKey'),
+      )
+
+      await expect(
+        service.changeUsername('user-1', 'bob'),
+      ).rejects.toMatchObject({
+        response: { code: 'CHANGE_IN_PROGRESS' },
+      })
     })
 
     it('rejects the current name', async () => {

@@ -20,11 +20,15 @@ import {
  * `instanceof Prisma.PrismaClientKnownRequestError` so the branch stays
  * reachable when PrismaService is mocked in unit tests.
  */
+function isUniqueViolation(error: unknown): boolean {
+  return (error as { code?: unknown })?.code === 'P2002'
+}
+
 function isUniqueViolationOn(error: unknown, column: string): boolean {
-  const err = error as { code?: unknown; meta?: { target?: unknown } }
-  if (err?.code !== 'P2002') {
+  if (!isUniqueViolation(error)) {
     return false
   }
+  const err = error as { meta?: { target?: unknown } }
   const target = err.meta?.target
   const rendered = Array.isArray(target)
     ? target.join(',')
@@ -109,6 +113,18 @@ export class UsernameService {
         where: { username },
       })
       if (taken) {
+        // Rows were read before this check, so a name owned by this account can
+        // only have been claimed by a concurrent request for the same change.
+        if (taken.userId === userId) {
+          const converged = await this.convergedResponse(
+            userId,
+            username,
+            false,
+          )
+          if (converged) {
+            return converged
+          }
+        }
         throw new ConflictException({
           code: 'USERNAME_TAKEN',
           message: 'This username is not available',
@@ -144,12 +160,36 @@ export class UsernameService {
         })
       })
     } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error
+      }
+
+      const converged = await this.convergedResponse(
+        userId,
+        username,
+        Boolean(owned),
+      )
+      if (converged) {
+        return converged
+      }
+
       if (isUniqueViolationOn(error, 'username')) {
         throw new ConflictException({
           code: 'USERNAME_TAKEN',
           message: 'This username is not available',
         })
       }
+
+      // The winning request moved this account to a different name, so its new
+      // active row already holds the pubkey this one tried to claim.
+      if (isUniqueViolationOn(error, 'activePubKey')) {
+        throw new ConflictException({
+          code: 'CHANGE_IN_PROGRESS',
+          message:
+            'Another username change for this account was processed first',
+        })
+      }
+
       throw error
     }
 
@@ -168,6 +208,46 @@ export class UsernameService {
       username,
       lightningAddress: this.toLightningAddress(username),
       switchedBack: Boolean(owned),
+    }
+  }
+
+  /**
+   * Re-reads state after a conflict and returns the normal success response if
+   * the account is already on `username`.
+   *
+   * `loadState` runs outside the transaction, so two requests for one account
+   * can both pass the checks before either commits. The loser then collides on
+   * `username` or on `activePubKey` depending on what the winner did — but if
+   * the winner made the change this request was asking for, the caller's intent
+   * is satisfied and an error would be false. It would also be harmful: a client
+   * told "this username is not available" about the name it just got will send
+   * the user to pick another one, spending a second unit of quota to end up
+   * somewhere they never asked to be.
+   *
+   * Returns null when the account landed somewhere else, which is a real
+   * conflict for the caller to report.
+   */
+  private async convergedResponse(
+    userId: string,
+    username: string,
+    switchedBack: boolean,
+  ): Promise<ChangeUsernameResponseDto | null> {
+    const { rows, active, changesLimit } = await this.loadState(userId)
+    if (active.username !== username) {
+      return null
+    }
+
+    this.logger.log({
+      event: 'username.change_converged',
+      userId,
+      to: username,
+    })
+
+    return {
+      ...this.buildQuota(rows, changesLimit),
+      username,
+      lightningAddress: this.toLightningAddress(username),
+      switchedBack,
     }
   }
 
