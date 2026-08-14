@@ -156,7 +156,7 @@ export class SparkSignatureGuard implements CanActivate {
     // can occupy the cache: a valid signature over a throwaway keypair proves
     // nothing and must not be allowed to fill it.
     if (!REPLAY_EXEMPT_METHODS.includes(method)) {
-      this.rejectReplay(normalizedPubkey, timestamp, signature)
+      this.rejectReplay(normalizedPubkey, canonicalMessage, ts)
     }
 
     // 8. Attach resolved user to request
@@ -166,20 +166,28 @@ export class SparkSignatureGuard implements CanActivate {
   }
 
   /**
-   * Throws when this exact signature has already been accepted, and otherwise
+   * Throws when this exact request has already been accepted, and otherwise
    * records it for as long as it could still be presented again.
    *
-   * `timestamp` arrives as the raw header, which is what the client signed and
-   * so what the digest has to cover. Callers must have passed it through the
-   * skew check first, which is what makes parsing it here safe.
+   * Keyed on the canonical message rather than on the signature. verifySignature
+   * is deliberately tolerant — hex decodes case-insensitively, DER converts to
+   * compact — so one signature has several valid spellings, and keying on the
+   * one the client happened to send lets a captured request through once per
+   * spelling. The message admits no such variation: anything that verifies,
+   * verifies against exactly these bytes. That also decouples this cache from
+   * the verifier, which has gained tolerances before and would otherwise
+   * silently reopen the hole each time it gains another.
+   *
+   * Two requests sharing a canonical message share a method, URL, millisecond
+   * timestamp and body hash, so they are the same request and the second is a
+   * duplicate whatever signature it carries.
    */
   private rejectReplay(
     pubkey: string,
-    timestamp: string,
-    signature: string,
+    canonicalMessage: string,
+    signedAtMs: number,
   ): void {
     const now = Date.now()
-    const signedAtMs = Number(timestamp)
 
     if (this.seenSignatures.size > REPLAY_CACHE_SWEEP_THRESHOLD) {
       this.sweepSeenSignatures(now)
@@ -193,13 +201,11 @@ export class SparkSignatureGuard implements CanActivate {
       this.seenSignatures.set(pubkey, bucket)
     }
 
-    const key = createHash('sha256')
-      .update(`${timestamp}:${signature}`)
-      .digest('hex')
+    const key = createHash('sha256').update(canonicalMessage).digest('hex')
 
     if (bucket.has(key)) {
-      this.logger.warn(`Replayed signature rejected for pubkey ${pubkey}`)
-      throw new UnauthorizedException('Signature already used')
+      this.logger.warn(`Replayed request rejected for pubkey ${pubkey}`)
+      throw new UnauthorizedException('Replayed request rejected')
     }
 
     // Refusing to remember one more signature would mean not being able to

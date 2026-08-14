@@ -45,6 +45,31 @@ function sha256Hex(buf: Buffer): string {
 }
 
 /**
+ * Re-encodes a 64-byte compact signature as DER, preserving (r, s).
+ *
+ * verifySignature accepts both forms — it converts DER to compact at
+ * secp256k1.utils.ts:109 — so this produces a different signature string that
+ * verifies against the same message and key.
+ */
+function compactToDer(hex: string): string {
+  const bytes = Buffer.from(hex, 'hex')
+  const trim = (x: Buffer) => {
+    let i = 0
+    while (i < x.length - 1 && x[i] === 0) i++
+    const v = x.subarray(i)
+    return v[0] & 0x80 ? Buffer.concat([Buffer.from([0]), v]) : v
+  }
+  const r = trim(bytes.subarray(0, 32))
+  const s = trim(bytes.subarray(32, 64))
+  return Buffer.concat([
+    Buffer.from([0x30, 4 + r.length + s.length, 0x02, r.length]),
+    r,
+    Buffer.from([0x02, s.length]),
+    s,
+  ]).toString('hex')
+}
+
+/**
  * Builds valid request headers + body that match what the guard expects.
  * Signatures are produced using the real @noble/secp256k1 library (imported at module level).
  */
@@ -386,6 +411,44 @@ describe('SparkSignatureGuard', () => {
       ).resolves.toBe(true)
       await expect(
         guard.canActivate(makeContext(headers, patchOpts)),
+      ).rejects.toThrow(UnauthorizedException)
+    })
+
+    it('rejects a replay re-encoded as a different signature string', async () => {
+      // The cache must key on the request that was signed, not on the bytes of
+      // the signature. verifySignature is deliberately tolerant — hex is decoded
+      // case-insensitively and DER is converted to compact — so a captured
+      // request can be re-encoded into a different signature string that still
+      // verifies against the same message and key. Keying on that string lets
+      // the same PATCH through as many times as there are valid encodings.
+      const { pubkey, timestamp, signature } = await buildValidRequest(
+        privateKey,
+        patchOpts,
+      )
+      const headersWith = (sig: string) => ({
+        'x-auth-pubkey': pubkey,
+        'x-auth-timestamp': timestamp,
+        'x-auth-signature': sig,
+      })
+
+      await expect(
+        guard.canActivate(
+          makeContext(headersWith(signature), patchOpts)
+        ),
+      ).resolves.toBe(true)
+
+      // Same signature, uppercase hex
+      await expect(
+        guard.canActivate(
+          makeContext(headersWith(signature.toUpperCase()), patchOpts),
+        ),
+      ).rejects.toThrow(UnauthorizedException)
+
+      // Same signature, DER encoding
+      await expect(
+        guard.canActivate(
+          makeContext(headersWith(compactToDer(signature)), patchOpts),
+        ),
       ).rejects.toThrow(UnauthorizedException)
     })
 
