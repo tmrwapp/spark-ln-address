@@ -3,13 +3,38 @@ import { createHash } from 'crypto'
 
 const logger = new Logger('secp256k1.utils')
 
-export async function loadSecp256k1(): Promise<typeof import('@noble/secp256k1')> {
+export async function loadSecp256k1(): Promise<
+  typeof import('@noble/secp256k1')
+> {
   // Prevent TypeScript from rewriting import() to require() in CJS output
   const importer = new Function('specifier', 'return import(specifier)') as (
     specifier: string,
   ) => Promise<typeof import('@noble/secp256k1')>
 
-  return importer('@noble/secp256k1')
+  try {
+    return await importer('@noble/secp256k1')
+  } catch (error) {
+    // Jest evaluates specs inside a Node vm context, where dynamic import is
+    // unavailable unless node runs with --experimental-vm-modules. Jest does
+    // transpile @noble/* to CommonJS (see transformIgnorePatterns in
+    // package.json), so require resolves it there.
+    //
+    // This fallback exists for the test runner. The import above is the
+    // production path and must stay: @noble/secp256k1 v3 is ESM-only, so a
+    // plain require fails under the real CommonJS build.
+    if (isDynamicImportUnavailable(error)) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      return require('@noble/secp256k1')
+    }
+    throw error
+  }
+}
+
+function isDynamicImportUnavailable(error: unknown): boolean {
+  return (
+    (error as { code?: unknown })?.code ===
+    'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG'
+  )
 }
 
 /**
@@ -124,7 +149,9 @@ export async function verifySignature(
       const messageUtf8Bytes = Buffer.from(message, 'utf8')
       const isUtf8Verify = verify(finalSigBytes, messageUtf8Bytes, pubKeyBytes)
       if (isUtf8Verify) {
-        logger.log(`Signature verified using UTF-8 message encoding for key: ${key}`)
+        logger.log(
+          `Signature verified using UTF-8 message encoding for key: ${key}`,
+        )
         return true
       }
     }

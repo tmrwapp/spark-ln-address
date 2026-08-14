@@ -47,6 +47,7 @@ src/
 prisma/schema.prisma     User, LightningName, AuthNonce, Invoice
 test/jest-e2e.setup.ts   mocks Spark SDK for E2E
 docker-compose.yml       mysql (3308), mysql-test (3309, --profile test)
+docs/username-change.md  spec: rules, data model, migration and rollout for username changes
 ```
 
 ## Domain Gotchas
