@@ -13,10 +13,64 @@ import type { Request } from 'express'
 
 const DEFAULT_MAX_SKEW_MS = 60000
 
+/**
+ * Hard cap on remembered signatures per pubkey. Entries expire after maxSkewMs,
+ * so an honest client stays far below it and only a flood reaches it. Requests
+ * over the cap are rejected rather than evicting a live entry: dropping one
+ * early would silently disable replay protection for the signature it belonged
+ * to, which is exactly what an attacker would want.
+ */
+const REPLAY_CACHE_MAX_PER_PUBKEY = 200
+
+/**
+ * Number of pubkey buckets that triggers a full sweep. Buckets are pruned when
+ * their pubkey next authenticates, so one that goes quiet lingers empty; the
+ * sweep collects those. Entries live at most maxSkewMs, so a sweep almost
+ * always clears nearly everything.
+ */
+const REPLAY_CACHE_SWEEP_THRESHOLD = 10000
+
+/**
+ * Methods exempt from replay rejection. Re-sending a read is something clients
+ * legitimately do — a retry after a dropped response is the obvious case — and
+ * a replayed read returns exactly what a fresh one would, so there is nothing
+ * to protect. Listing the exempt methods rather than the protected ones means
+ * anything new defaults to protected.
+ *
+ * The corollary is that signed GET/HEAD handlers must stay free of side
+ * effects; one that issues a token or consumes a single-use code would need
+ * replay protection and would no longer be safe to exempt here.
+ */
+const REPLAY_EXEMPT_METHODS = ['GET', 'HEAD']
+
 @Injectable()
 export class SparkSignatureGuard implements CanActivate {
   private readonly logger = new Logger(SparkSignatureGuard.name)
   private readonly maxSkewMs: number
+
+  /**
+   * Signatures already accepted, bucketed by pubkey: each bucket maps a digest
+   * of the auth triple to its expiry. A valid client never repeats one, because
+   * the timestamp is part of the signed message.
+   *
+   * Required by the username endpoints: PATCH /v1/users/me/username is NOT
+   * idempotent, so a request captured inside the skew window could otherwise be
+   * replayed to spend another unit of the change quota, or to flip the user's
+   * active name once the quota is gone.
+   *
+   * Bucketing per pubkey is what keeps that guarantee under load: a flood can
+   * only fill the flooder's own bucket, so no amount of traffic from one key can
+   * push another key's signature out of the cache and reopen the replay window.
+   *
+   * Entries expire relative to the timestamp they carry, so a bucket is scanned
+   * in full when pruned; REPLAY_CACHE_MAX_PER_PUBKEY bounds what that costs.
+   *
+   * This is process-local. PM2 runs a single fork instance today
+   * (ecosystem.config.cjs), so it covers every request. Scaling to more than one
+   * instance or replica would silently weaken it and the cache would have to move
+   * to shared storage.
+   */
+  private readonly seenSignatures = new Map<string, Map<string, number>>()
 
   constructor(
     private readonly prisma: PrismaService,
@@ -78,7 +132,11 @@ export class SparkSignatureGuard implements CanActivate {
     const canonicalBuffer = Buffer.from(canonicalMessage, 'utf8')
     const normalizedPubkey = pubkey.toLowerCase()
 
-    const valid = await verifySignature(canonicalBuffer, signature, normalizedPubkey)
+    const valid = await verifySignature(
+      canonicalBuffer,
+      signature,
+      normalizedPubkey,
+    )
     if (!valid) {
       throw new UnauthorizedException('Invalid signature')
     }
@@ -93,9 +151,105 @@ export class SparkSignatureGuard implements CanActivate {
       throw new UnauthorizedException('Unknown pubkey')
     }
 
-    // 7. Attach resolved user to request
+    // 7. Reject replays of an already-accepted signature, for the methods that
+    // can be harmed by one. Runs last so that only traffic from a known account
+    // can occupy the cache: a valid signature over a throwaway keypair proves
+    // nothing and must not be allowed to fill it.
+    if (!REPLAY_EXEMPT_METHODS.includes(method)) {
+      this.rejectReplay(normalizedPubkey, canonicalMessage, ts)
+    }
+
+    // 8. Attach resolved user to request
     req.user = lightningName.user
 
     return true
+  }
+
+  /**
+   * Throws when this exact request has already been accepted, and otherwise
+   * records it for as long as it could still be presented again.
+   *
+   * Keyed on the canonical message rather than on the signature. verifySignature
+   * is deliberately tolerant — hex decodes case-insensitively, DER converts to
+   * compact — so one signature has several valid spellings, and keying on the
+   * one the client happened to send lets a captured request through once per
+   * spelling. The message admits no such variation: anything that verifies,
+   * verifies against exactly these bytes. That also decouples this cache from
+   * the verifier, which has gained tolerances before and would otherwise
+   * silently reopen the hole each time it gains another.
+   *
+   * Two requests sharing a canonical message share a method, URL, millisecond
+   * timestamp and body hash, so they are the same request and the second is a
+   * duplicate whatever signature it carries.
+   */
+  private rejectReplay(
+    pubkey: string,
+    canonicalMessage: string,
+    signedAtMs: number,
+  ): void {
+    const now = Date.now()
+
+    if (this.seenSignatures.size > REPLAY_CACHE_SWEEP_THRESHOLD) {
+      this.sweepSeenSignatures(now)
+    }
+
+    let bucket = this.seenSignatures.get(pubkey)
+    if (bucket) {
+      this.pruneBucket(bucket, now)
+    } else {
+      bucket = new Map<string, number>()
+      this.seenSignatures.set(pubkey, bucket)
+    }
+
+    const key = createHash('sha256').update(canonicalMessage).digest('hex')
+
+    if (bucket.has(key)) {
+      this.logger.warn(`Replayed request rejected for pubkey ${pubkey}`)
+      throw new UnauthorizedException('Replayed request rejected')
+    }
+
+    // Refusing to remember one more signature would mean not being able to
+    // detect its replay, so reject instead. Only this pubkey is affected.
+    if (bucket.size >= REPLAY_CACHE_MAX_PER_PUBKEY) {
+      this.logger.warn(`Replay cache full for pubkey ${pubkey}`)
+      throw new UnauthorizedException('Too many signatures in flight')
+    }
+
+    // Expiry is derived from the signed timestamp, not from now. The skew check
+    // accepts a signature anywhere in [ts - skew, ts + skew], so anchoring to
+    // acceptance time would drop it at `now + skew` while it stayed presentable
+    // until `ts + skew` — a client whose clock runs fast opens exactly that gap.
+    // Past `ts + skew` the skew check rejects the request on its own, so
+    // remembering it any longer adds nothing.
+    bucket.set(key, signedAtMs + this.maxSkewMs)
+  }
+
+  /**
+   * Drops expired entries from one bucket. Expiry follows the signed timestamp
+   * rather than insertion time, so entries do not expire in insertion order and
+   * the scan cannot stop early. A bucket holds at most
+   * REPLAY_CACHE_MAX_PER_PUBKEY entries, which bounds the cost.
+   *
+   * An entry is kept while `now` is still within its window: at exactly
+   * `expiresAt` the skew check would admit the signature, so it has to stay.
+   */
+  private pruneBucket(bucket: Map<string, number>, now: number): void {
+    for (const [key, expiresAt] of bucket) {
+      if (expiresAt < now) {
+        bucket.delete(key)
+      }
+    }
+  }
+
+  /**
+   * Prunes every bucket and drops those left empty.
+   */
+  private sweepSeenSignatures(now: number): void {
+    for (const [pubkey, bucket] of this.seenSignatures) {
+      this.pruneBucket(bucket, now)
+      if (bucket.size === 0) {
+        this.seenSignatures.delete(pubkey)
+      }
+    }
   }
 }

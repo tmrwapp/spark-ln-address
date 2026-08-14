@@ -27,6 +27,9 @@ Scripts: `build`, `start[:dev|:debug|:prod]`, `lint`, `format`, `test[:watch|:co
 - `GET /v1/auth/lnurl/callback?k1&sig&key&username` — verifies, creates `User` + `LightningName`
 - `GET /v1/query/username/:pubKey`
 - `GET /v1/query/pubkey/:username`
+- `GET /v1/users/me/username` — active name, history, change quota (signed)
+- `PATCH /v1/users/me/username` — change or switch back (signed, NOT idempotent)
+- `POST /v1/internal/username-changes/:pubkey/grant` — support grant (`INTERNAL_OPS_TOKEN`)
 
 ## File Map
 
@@ -37,6 +40,7 @@ src/
   lnurl/                 LNURL-Pay controller/service
   auth/                  LNURL-Auth (k1 issuance + signature verification)
   query/                 username <-> pubkey lookups
+  username/              username change, history and support grants
   lightspark/            SparkWallet wrapper (creates invoices)
   common/                utils.ts (normalizeUsername), constants.ts, spark-address.utils.ts
   prisma/                PrismaService
@@ -67,6 +71,18 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
   Cascade deletes from `User`.
 - **`queryByUsername` uses `contains`,** not exact match — by design but easy to miss
   (`src/query/query.service.ts`).
+- **A user owns many `LightningName` rows, one `active`.** A username change retires the current
+  row and activates (or creates) another; retired rows are never deleted, so the `username` unique
+  index keeps a retired name permanently unavailable to everyone. Every read path must filter
+  `active: true`. Quota is DERIVED (`rows - 1`), never stored; only the ceiling
+  (`User.bonusUsernameChanges`) is persisted.
+- **`activePubKey` mirrors `linkingPubKeyHex` while active, `NULL` once retired.** It replaces the
+  old `@unique` on `linkingPubKeyHex` (which now allows repeats) and enforces one active name per
+  pubkey. Always write it in the same statement that flips `active`, and deactivate before
+  activating or the unique index rejects the write.
+- **Replay cache in `SparkSignatureGuard`** (process-local `Map`, TTL = `AUTH_MAX_SKEW_MS`):
+  required because `PATCH /v1/users/me/username` is not idempotent. It only holds under
+  `instances: 1` in `ecosystem.config.cjs`; scaling out needs shared storage.
 - **Spark address bech32m encoding** (`src/common/spark-address.utils.ts`): HRPs
   `spark`/`sparkt`/`sparkrt`/`sparks`/`sparkl`; payload `0x0A 0x21` + 33-byte compressed pubkey.
   Encoding errors are swallowed in the query service and returned as `null`.

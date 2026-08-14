@@ -34,6 +34,10 @@ describe('AuthService', () => {
     user: {
       create: jest.fn(),
     },
+    // The user + name pair is created in one transaction so a losing race on the
+    // username cannot leave an orphaned User behind. Handing the callback the
+    // same mock keeps the per-delegate assertions below working unchanged.
+    $transaction: jest.fn(),
   }
 
   const mockConfigService = {
@@ -59,6 +63,9 @@ describe('AuthService', () => {
 
     // Reset all mocks
     jest.clearAllMocks()
+    mockPrismaService.$transaction.mockImplementation(
+      async (callback: (tx: unknown) => unknown) => callback(mockPrismaService),
+    )
   })
 
   it('should be defined', () => {
@@ -135,7 +142,9 @@ describe('AuthService', () => {
 
       // Generate a valid signature
       const k1Bytes = Buffer.from(validK1, 'hex')
-      validSignature = Buffer.from(sign(k1Bytes, validPrivateKey)).toString('hex')
+      validSignature = Buffer.from(sign(k1Bytes, validPrivateKey)).toString(
+        'hex',
+      )
 
       validUsername = 'testuser'
     })
@@ -166,7 +175,9 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
       mockPrismaService.lightningName.findUnique.mockResolvedValue(null) // Username available
       mockPrismaService.user.create.mockResolvedValue(mockUser)
-      mockPrismaService.lightningName.create.mockResolvedValue(mockLightningName)
+      mockPrismaService.lightningName.create.mockResolvedValue(
+        mockLightningName,
+      )
       mockPrismaService.authNonce.update.mockResolvedValue({
         ...mockNonce,
         usedAt: new Date(),
@@ -192,6 +203,7 @@ describe('AuthService', () => {
           username: validUsername,
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
+          activePubKey: validPublicKey,
         },
       })
       expect(mockPrismaService.authNonce.update).toHaveBeenCalledWith({
@@ -203,7 +215,9 @@ describe('AuthService', () => {
     it('should successfully verify using UTF-8 k1 encoding', async () => {
       // Generate signature over UTF-8 bytes of k1
       const k1Utf8Bytes = Buffer.from(validK1, 'utf8')
-      const utf8Signature = Buffer.from(sign(k1Utf8Bytes, validPrivateKey)).toString('hex')
+      const utf8Signature = Buffer.from(
+        sign(k1Utf8Bytes, validPrivateKey),
+      ).toString('hex')
 
       const mockNonce = {
         id: 'nonce-1',
@@ -265,7 +279,12 @@ describe('AuthService', () => {
       mockPrismaService.lightningName.create.mockResolvedValue({})
       mockPrismaService.authNonce.update.mockResolvedValue({})
 
-      const result = await service.verifyAndBindUsername(set1.k1, set1.sig, set1.key, 'user1')
+      const result = await service.verifyAndBindUsername(
+        set1.k1,
+        set1.sig,
+        set1.key,
+        'user1',
+      )
       expect(result).toEqual({ status: 'OK' })
     })
 
@@ -290,7 +309,12 @@ describe('AuthService', () => {
       mockPrismaService.lightningName.create.mockResolvedValue({})
       mockPrismaService.authNonce.update.mockResolvedValue({})
 
-      const result = await service.verifyAndBindUsername(set2.k1, set2.sig, set2.key, 'user2')
+      const result = await service.verifyAndBindUsername(
+        set2.k1,
+        set2.sig,
+        set2.key,
+        'user2',
+      )
       expect(result).toEqual({ status: 'OK' })
     })
 
@@ -324,7 +348,12 @@ describe('AuthService', () => {
         usedAt: new Date(),
       })
 
-      await service.verifyAndBindUsername(validK1, validSignature, validPublicKey, 'TestUser')
+      await service.verifyAndBindUsername(
+        validK1,
+        validSignature,
+        validPublicKey,
+        'TestUser',
+      )
 
       expect(mockPrismaService.lightningName.findUnique).toHaveBeenCalledWith({
         where: { username: 'testuser' },
@@ -334,6 +363,7 @@ describe('AuthService', () => {
           username: 'testuser',
           userId: mockUser.id,
           linkingPubKeyHex: validPublicKey,
+          activePubKey: validPublicKey,
         },
       })
     })
@@ -342,11 +372,21 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(null)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toThrow(BadRequestException)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'Invalid k1' },
       })
@@ -364,11 +404,21 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toThrow(BadRequestException)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'k1 already used' },
       })
@@ -386,11 +436,21 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toThrow(BadRequestException)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'k1 expired' },
       })
@@ -410,11 +470,21 @@ describe('AuthService', () => {
       const invalidSignature = 'invalid-signature-hex'
 
       await expect(
-        service.verifyAndBindUsername(validK1, invalidSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          invalidSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toThrow(BadRequestException)
 
       await expect(
-        service.verifyAndBindUsername(validK1, invalidSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          invalidSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'Invalid signature' },
       })
@@ -438,14 +508,26 @@ describe('AuthService', () => {
       }
 
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
-      mockPrismaService.lightningName.findUnique.mockResolvedValue(existingLightningName)
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(
+        existingLightningName,
+      )
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toThrow(BadRequestException)
 
       await expect(
-        service.verifyAndBindUsername(validK1, validSignature, validPublicKey, validUsername),
+        service.verifyAndBindUsername(
+          validK1,
+          validSignature,
+          validPublicKey,
+          validUsername,
+        ),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'Username already taken' },
       })
@@ -470,7 +552,9 @@ describe('AuthService', () => {
       }
 
       // Test with uncompressed public key (130 hex chars)
-      const publicKeyUncompressed = Buffer.from(getPublicKey(validPrivateKey, false)).toString('hex')
+      const publicKeyUncompressed = Buffer.from(
+        getPublicKey(validPrivateKey, false),
+      ).toString('hex')
 
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
       mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
@@ -533,7 +617,12 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
 
       await expect(
-        service.verifyAndBindUsername(validK1, 'not-hex!', '0'.repeat(66), 'testuser'),
+        service.verifyAndBindUsername(
+          validK1,
+          'not-hex!',
+          '0'.repeat(66),
+          'testuser',
+        ),
       ).rejects.toThrow(BadRequestException)
     })
 
@@ -550,9 +639,13 @@ describe('AuthService', () => {
       mockPrismaService.authNonce.findUnique.mockResolvedValue(mockNonce)
 
       await expect(
-        service.verifyAndBindUsername(validK1, 'signature', 'invalid-key', 'testuser'),
+        service.verifyAndBindUsername(
+          validK1,
+          'signature',
+          'invalid-key',
+          'testuser',
+        ),
       ).rejects.toThrow(BadRequestException)
     })
   })
 })
-

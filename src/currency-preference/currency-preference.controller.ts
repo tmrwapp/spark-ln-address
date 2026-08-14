@@ -14,11 +14,11 @@ import { CurrencyPreferenceService } from './currency-preference.service'
 import { SetCurrencyPreferenceDto } from './dto/set-currency-preference.dto'
 import { CurrencyPreferenceResponseDto } from './dto/currency-preference-response.dto'
 
-// NOTE: Replay-protection LRU is deliberately deferred for this PR.
-// Currency preference is idempotent (replaying a PATCH with the same signed body
-// re-sets the same value with no side-effect escalation). The 60-second skew window
-// keeps the replay surface acceptably small. We should later revisit if the attack surface
-// grows (e.g. state-mutating endpoints with financial consequence).
+// NOTE: SparkSignatureGuard applies replay rejection to every method it does
+// not exempt, so the PATCH below is covered even though it does not need to be:
+// re-setting the same preference is a no-op. The practical consequence is that
+// a client must re-sign to retry it, rather than resending the same headers.
+// The GET is exempt, so retrying a read is not mistaken for a replay.
 
 @Controller('v1/users/me')
 @UseGuards(SparkSignatureGuard)

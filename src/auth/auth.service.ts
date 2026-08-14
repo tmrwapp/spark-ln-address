@@ -7,7 +7,7 @@ import { verifySignature } from './secp256k1.utils'
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
+  private readonly logger = new Logger(AuthService.name)
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -49,7 +49,10 @@ export class AuthService {
     }
 
     if (nonce.usedAt) {
-      throw new BadRequestException({ status: 'ERROR', reason: 'k1 already used' })
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'k1 already used',
+      })
     }
 
     if (nonce.expiresAt < new Date()) {
@@ -64,7 +67,10 @@ export class AuthService {
 
     if (!/^[0-9a-fA-F]+$/.test(sig)) {
       this.logger.error(`Invalid sig: ${sig}`)
-      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid signature' })
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Invalid signature',
+      })
     }
 
     if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
@@ -74,30 +80,57 @@ export class AuthService {
 
     // Verify secp256k1 signature
     if (!(await verifySignature(k1, sig, key))) {
-      throw new BadRequestException({ status: 'ERROR', reason: 'Invalid signature' })
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Invalid signature',
+      })
     }
 
-    // Check if username is available
+    // Check if username is available. This deliberately does NOT filter on
+    // `active`, so a name retired by a username change stays permanently
+    // unavailable to everyone.
     const existing = await this.prisma.lightningName.findUnique({
       where: { username },
     })
 
     if (existing) {
-      throw new BadRequestException({ status: 'ERROR', reason: 'Username already taken' })
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Username already taken',
+      })
     }
 
-    // Create user and bind username
-    const user = await this.prisma.user.create({
-      data: {},
-    })
+    // Create user and bind username. Both in one transaction so a losing race
+    // on the username does not leave an orphaned User row behind.
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {},
+        })
 
-    await this.prisma.lightningName.create({
-      data: {
-        username,
-        userId: user.id,
-        linkingPubKeyHex: key,
-      },
-    })
+        await tx.lightningName.create({
+          data: {
+            username,
+            userId: user.id,
+            linkingPubKeyHex: key,
+            // Mirrors linkingPubKeyHex while active; enforces one active name per
+            // pubkey through a unique index. See the username-change migration.
+            activePubKey: key,
+          },
+        })
+      })
+    } catch (error) {
+      // The check above is advisory: two registrations racing on the same name
+      // both pass it and one loses at the unique index. Report the loser as a
+      // taken username rather than a 500.
+      if ((error as { code?: unknown })?.code === 'P2002') {
+        throw new BadRequestException({
+          status: 'ERROR',
+          reason: 'Username already taken',
+        })
+      }
+      throw error
+    }
 
     // Mark nonce as used
     await this.prisma.authNonce.update({

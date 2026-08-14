@@ -20,6 +20,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   defaultReceivingCurrency ReceivingCurrency @default(USDB)
+  // Extra username changes granted by support, on top of the default allowance.
+  // Raises the ceiling only; usage stays derived from the LightningName row count.
+  bonusUsernameChanges Int @default(0)
 
   // Relations
   lightningNames LightningName[]
@@ -31,13 +34,23 @@ model LightningName {
   id                  String  @id @default(cuid(2))
   username            String  @unique
   userId              String
-  linkingPubKeyHex    String  @unique // secp256k1 public key hex for LNURL-Auth
+  linkingPubKeyHex    String  // secp256k1 public key hex for LNURL-Auth
   active              Boolean @default(true)
+  // Mirror of linkingPubKeyHex while the row is active, NULL once retired.
+  // MySQL allows repeated NULLs in a unique index, so this enforces
+  // "at most one active name per pubkey" while permitting unlimited retired
+  // rows. Always written in the same statement that flips `active`.
+  activePubKey        String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now()) @updatedAt
 
   // Relations
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   invoices Invoice[]
 
+  @@unique([activePubKey])
+  @@index([linkingPubKeyHex])
+  @@index([userId])
   @@map("lightning_names")
 }
 
