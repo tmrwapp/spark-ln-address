@@ -491,14 +491,38 @@ another user must be rejected. That single test is what proves permanent reserva
    the final migration SQL.
 2. **Back up.** The migration drops a unique index. Take a dump first; there is a single production
    MySQL behind this service.
-3. **Apply the migration.** `npx prisma migrate deploy`. Existing rows keep their data; they only
+3. **Stop the service.** `pm2 stop spark-ln-address`. This is required, not hygiene — see the
+   warning below.
+4. **Apply the migration.** `npx prisma migrate deploy`. Existing rows keep their data; they only
    gain the two timestamp columns and a `bonusUsernameChanges` of 0.
-4. **Confirm `INTERNAL_OPS_TOKEN` is set in production.** The grant endpoint ships with the feature
+5. **Confirm `INTERNAL_OPS_TOKEN` is set in production.** The grant endpoint ships with the feature
    and `InternalOpsGuard` fails closed. No new variable is introduced, but this existing one must
    actually hold a value.
-5. **Deploy and restart.** `npm run build` then `pm2 restart spark-ln-address`.
-6. **Backend first, app after.** The endpoints are additive, so the current app build keeps working
+6. **Deploy and start.** `npm run build` then `pm2 start spark-ln-address`. The service comes back
+   up on the new build, so no version of the app ever runs against the migrated schema without
+   knowing about `activePubKey`.
+7. **Verify no duplicates were created.** Empty result expected:
+   ```sql
+   SELECT `linkingPubKeyHex`, COUNT(*) FROM `lightning_names`
+   WHERE `active` = 1 GROUP BY `linkingPubKeyHex` HAVING COUNT(*) > 1;
+   ```
+8. **Backend first, app after.** The endpoints are additive, so the current app build keeps working
    untouched. The Settings screen can follow in the next release.
+
+> **The old build must never serve against the migrated schema.** Step 1 of the migration drops the
+> unique index on `linkingPubKeyHex`, and the replacement index only constrains non-NULL
+> `activePubKey`. The previous `verifyAndBindUsername` checks availability by `username` alone and
+> never writes `activePubKey`, so its inserts land as NULL and collide with nothing: that build was
+> relying entirely on the dropped index to stop one pubkey registering twice. While it serves
+> against the new schema, any user re-running `/v1/auth/lnurl/callback` with a free username gets a
+> second active row — no race required — and nothing detects it afterwards, because the unique
+> index cannot see NULLs. Two active rows for one pubkey make the user's Lightning address depend
+> on which row `findFirst` returns.
+>
+> This is why step 3 exists, and it applies to **rolling back** just as much: reverting the
+> application to the previous release while leaving the migration in place reopens exactly the same
+> window, with the service fully up. If a rollback is needed, restore the database dump from step 2
+> alongside it, or accept that step 7's query has to be run and any duplicates repaired by hand.
 
 There is no feature flag proposed. The endpoint is inert until the app calls it, which makes a flag
 redundant. If a staged rollout is wanted anyway, the cheapest gate is an env variable checked in the
