@@ -252,10 +252,6 @@ export class UsernameService {
   }
 
   /**
-   * Raises one user's change ceiling. Called by support through the internal ops
-   * endpoint; usage is never rewritten, only the ceiling moves.
-   */
-  /**
    * The same view of a user `getUsernameInfo` returns, addressed by linking
    * public key instead of by internal user id.
    *
@@ -272,6 +268,10 @@ export class UsernameService {
     return this.getUsernameInfo(active.userId)
   }
 
+  /**
+   * Raises one user's change ceiling. Called by support through the internal ops
+   * endpoint; usage is never rewritten, only the ceiling moves.
+   */
   async grantExtraChanges(
     pubKeyHex: string,
     amount: number,

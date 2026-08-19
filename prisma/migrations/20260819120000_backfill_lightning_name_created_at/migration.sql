@@ -12,28 +12,59 @@
 -- The fix is available in the data: a user and their first name are created in
 -- ONE transaction (auth.service.ts), so `users.createdAt` IS that first claim.
 --
--- Scope is each user's OLDEST row only, which is exactly the set that can be
--- wrong:
---   * before the ALTER a pubkey had at most one row (the previous migration's
---     own backfill comment states this), so a pre-existing user's oldest row is
---     the defaulted one;
---   * a name claimed AFTER the ALTER is never a user's oldest row, so a genuine
---     timestamp is never overwritten;
---   * a user who registered after the ALTER has a correct oldest row already,
---     and rewriting it to `users.createdAt` moves it by the milliseconds
---     between two statements of one transaction.
+-- THIS DISCARDS THE VALUES IT OVERWRITES AND PRISMA HAS NO DOWN MIGRATION.
+-- Reversal means restoring from a backup. Run the count below first and check
+-- it against the size of the pre-ALTER cohort.
 --
--- `ln.createdAt > u.createdAt` keeps it from moving any date backwards past the
--- user it belongs to, and makes a second run a no-op.
+--   -- rows this will change, and what they look like now:
+--   SELECT COUNT(*) FROM `lightning_names` ln
+--   JOIN `users` u ON u.`id` = ln.`userId`
+--   WHERE ln.`createdAt` > u.`createdAt` + INTERVAL 1 SECOND;
+--
+--   -- after: expected 0
+--   (same query)
+--
+-- Scope, twice narrowed:
+--
+--  1. ONE ROW PER USER, their oldest, chosen by ROW_NUMBER rather than by
+--     matching the group's MIN value. A value match would update BOTH rows of a
+--     user holding two names created in the same millisecond — two racing
+--     changeUsername calls can do that — and silently rewrite a real claim date.
+--     Ties break on `id`, so the choice is deterministic.
+--  2. ONLY ROWS THAT ARE ACTUALLY WRONG, via the one-second threshold. Inside
+--     the registration transaction the name row is written microseconds after
+--     the user row, so a plain `>` comparison matches nearly every user in the
+--     table and rewrites correct dates by a sub-millisecond amount — a write set
+--     the size of the whole user base, to fix a cohort that registered days or
+--     weeks before the ALTER. A defaulted row misses its true date by that whole
+--     gap; a genuine row misses it by microseconds. One second separates them
+--     with room to spare.
+--
+-- A name claimed after the ALTER is never a user's oldest row (before it, a
+-- pubkey had at most one row — see the previous migration's own backfill), so
+-- no genuine timestamp is in range either way. Re-running is a no-op: the
+-- threshold stops matching once the dates agree.
+--
+-- If `lightning_names` has grown to the point where a full scan at deploy time
+-- is not acceptable — there is no index on (userId, createdAt), so the window
+-- function reads every row — run this out of band in batches instead, and mark
+-- the migration applied. The predicate is the same either way.
 UPDATE `lightning_names` AS ln
 JOIN `users` AS u
   ON u.`id` = ln.`userId`
 JOIN (
-  SELECT `userId`, MIN(`createdAt`) AS `firstCreatedAt`
-  FROM `lightning_names`
-  GROUP BY `userId`
-) AS f
-  ON f.`userId` = ln.`userId`
- AND ln.`createdAt` = f.`firstCreatedAt`
+  SELECT `id`
+  FROM (
+    SELECT
+      `id`,
+      ROW_NUMBER() OVER (
+        PARTITION BY `userId`
+        ORDER BY `createdAt` ASC, `id` ASC
+      ) AS `rn`
+    FROM `lightning_names`
+  ) AS `ranked`
+  WHERE `rn` = 1
+) AS `oldest`
+  ON `oldest`.`id` = ln.`id`
 SET ln.`createdAt` = u.`createdAt`
-WHERE ln.`createdAt` > u.`createdAt`;
+WHERE ln.`createdAt` > u.`createdAt` + INTERVAL 1 SECOND;

@@ -232,8 +232,21 @@ would be read on the support screen the ops read endpoint feeds.
 `20260819120000_backfill_lightning_name_created_at` closes it. A user and their first name are
 created in one transaction, so `users.createdAt` IS that first claim; the backfill copies it onto
 each user's OLDEST `lightning_names` row and nothing else. A name claimed after the ALTER is never a
-user's oldest row, so no genuine timestamp is rewritten, and the `ln.createdAt > u.createdAt` guard
-makes a second run a no-op.
+user's oldest row, so no genuine timestamp is rewritten.
+
+Two narrowings are load-bearing. The oldest row is picked with `ROW_NUMBER`, not by matching the
+group's `MIN(createdAt)`: a value match updates BOTH rows of a user holding two names created in the
+same millisecond, which two racing `changeUsername` calls can produce, and would rewrite a real
+claim date. And only rows more than a second adrift are touched: inside the registration transaction
+the name is written microseconds after the user, so a plain `>` matches nearly every user in the
+table and rewrites correct dates by a sub-millisecond amount — a write set the size of the whole
+user base to fix the pre-ALTER cohort. A defaulted row misses its true date by days; a genuine one
+by microseconds.
+
+The migration discards what it overwrites and Prisma has no down step, so it ships with the count
+query to run before and after. If the table has grown enough that a full scan at deploy time is
+unwelcome — there is no index on `(userId, createdAt)` — the same predicate can be run out of band
+in batches instead.
 
 ## 6. API
 
