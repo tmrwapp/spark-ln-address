@@ -255,22 +255,29 @@ export class UsernameService {
    * Raises one user's change ceiling. Called by support through the internal ops
    * endpoint; usage is never rewritten, only the ceiling moves.
    */
+  /**
+   * The same view of a user `getUsernameInfo` returns, addressed by linking
+   * public key instead of by internal user id.
+   *
+   * This is the read half of the support surface. Without it the quota is
+   * visible only as the response to a grant that has already been applied, and
+   * a grant cannot be revoked — so an operator checking whether a customer is
+   * genuinely at their ceiling had to spend one to find out.
+   */
+  async getUsernameInfoByPubKey(
+    pubKeyHex: string,
+  ): Promise<UsernameInfoResponseDto> {
+    const active = await this.resolveActiveByPubKey(pubKeyHex)
+
+    return this.getUsernameInfo(active.userId)
+  }
+
   async grantExtraChanges(
     pubKeyHex: string,
     amount: number,
     reason: string,
   ): Promise<UsernameInfoResponseDto> {
-    const normalizedPubKey = pubKeyHex.toLowerCase()
-
-    const active = await this.prisma.lightningName.findFirst({
-      where: { linkingPubKeyHex: normalizedPubKey, active: true },
-    })
-
-    if (!active) {
-      throw new NotFoundException(
-        'No active username found for this public key',
-      )
-    }
+    const active = await this.resolveActiveByPubKey(pubKeyHex)
 
     await this.prisma.user.update({
       where: { id: active.userId },
@@ -286,6 +293,33 @@ export class UsernameService {
     })
 
     return this.getUsernameInfo(active.userId)
+  }
+
+  /**
+   * The active row for a linking public key, which is what identifies a user on
+   * this surface.
+   *
+   * Lowercased before the lookup: `verifyAndBindUsername` stores
+   * `linkingPubKeyHex` exactly as the client sent it, so a user registered with
+   * uppercase hex is invisible to an exact-match query. That storage
+   * inconsistency is pre-existing and tracked separately; both halves of the
+   * ops surface read through here so neither makes it worse, and so a pubkey
+   * that resolves for one verb resolves for the other.
+   */
+  private async resolveActiveByPubKey(
+    pubKeyHex: string,
+  ): Promise<LightningName> {
+    const active = await this.prisma.lightningName.findFirst({
+      where: { linkingPubKeyHex: pubKeyHex.toLowerCase(), active: true },
+    })
+
+    if (!active) {
+      throw new NotFoundException(
+        'No active username found for this public key',
+      )
+    }
+
+    return active
   }
 
   /**
