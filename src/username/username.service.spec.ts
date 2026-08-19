@@ -449,6 +449,57 @@ describe('UsernameService', () => {
     })
   })
 
+  describe('getUsernameInfoByPubKey', () => {
+    it('returns the same view getUsernameInfo does, without spending a grant', async () => {
+      // The whole point of the read half: an operator can see the ceiling
+      // before deciding, and a grant cannot be revoked once applied.
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(makeRow())
+      mockPrismaService.lightningName.findMany.mockResolvedValue([
+        makeRow(),
+        makeRow({ id: 'ln-old', username: 'al', active: false }),
+      ])
+      mockPrismaService.user.findUniqueOrThrow.mockResolvedValue({
+        bonusUsernameChanges: 1,
+      })
+
+      const result = await service.getUsernameInfoByPubKey(PUBKEY)
+
+      expect(result).toMatchObject({
+        username: 'alice',
+        changesUsed: 1,
+        changesLimit: 3,
+        changesRemaining: 2,
+      })
+      expect(result.history).toHaveLength(2)
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled()
+    })
+
+    it('looks the user up by the lowercased pubkey, like the grant does', async () => {
+      // verifyAndBindUsername stores the pubkey as received, so a user
+      // registered with uppercase hex would be invisible to an exact match —
+      // and a pubkey that resolves for one verb must resolve for the other.
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(makeRow())
+      mockPrismaService.lightningName.findMany.mockResolvedValue([makeRow()])
+      mockPrismaService.user.findUniqueOrThrow.mockResolvedValue({
+        bonusUsernameChanges: 0,
+      })
+
+      await service.getUsernameInfoByPubKey(PUBKEY.toUpperCase())
+
+      expect(mockPrismaService.lightningName.findFirst).toHaveBeenCalledWith({
+        where: { linkingPubKeyHex: PUBKEY, active: true },
+      })
+    })
+
+    it('throws for an unknown pubkey rather than inventing a user', async () => {
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(null)
+
+      await expect(service.getUsernameInfoByPubKey(PUBKEY)).rejects.toThrow(
+        NotFoundException,
+      )
+    })
+  })
+
   describe('grantExtraChanges', () => {
     it('raises the ceiling and returns the refreshed quota', async () => {
       mockPrismaService.lightningName.findFirst.mockResolvedValue(makeRow())
