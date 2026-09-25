@@ -1,9 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common'
 import {
-  OnrampOrderRequest,
-  OnrampOrderResponse,
+  LightningQuoteRequest,
+  LightningQuoteResponse,
   OrderStatusResponse,
-} from './flashnet.types';
+} from './flashnet.types'
 
 /**
  * Deterministic mock of FlashnetService for test environments.
@@ -11,20 +11,19 @@ import {
  */
 @Injectable()
 export class FlashnetMockService {
-  private readonly logger = new Logger(FlashnetMockService.name);
+  private readonly logger = new Logger(FlashnetMockService.name)
 
-  async createOnrampOrder(
-    params: OnrampOrderRequest,
+  async createLightningQuote(
+    params: LightningQuoteRequest,
     _idempotencyKey: string,
-  ): Promise<OnrampOrderResponse> {
-    this.logger.log({ event: 'flashnet.mock.createOnrampOrder', params });
+  ): Promise<LightningQuoteResponse> {
+    void _idempotencyKey
+    this.logger.log({ event: 'flashnet.mock.createLightningQuote', params })
 
-    const orderId = `ord_mock_${randomHex(8)}`;
-    const quoteId = `q_mock_${randomHex(8)}`;
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const quoteId = `q_mock_${randomHex(8)}`
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
 
     return {
-      orderId,
       quoteId,
       depositAddress: `lnbcmock${randomHex(16)}`,
       amountIn: params.amount,
@@ -41,18 +40,23 @@ export class FlashnetMockService {
       amountMode: 'exact_in',
       lightningReceiveRequestId: `SparkLightningReceiveRequest:mock-${randomHex(8)}`,
       replayed: false,
-    };
+    }
+  }
+
+  async getQuoteOrder(_quoteId: string): Promise<null> {
+    void _quoteId
+    return null
   }
 
   async getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
-    this.logger.log({ event: 'flashnet.mock.getOrderStatus', orderId });
+    this.logger.log({ event: 'flashnet.mock.getOrderStatus', orderId })
     return {
       orderId,
       status: 'completed',
       amountOut: '920000',
       errorCode: undefined,
       errorMessage: undefined,
-    };
+    }
   }
 
   verifyWebhookSignature(
@@ -60,7 +64,10 @@ export class FlashnetMockService {
     _signature: string,
     _timestamp: string,
   ): boolean {
-    return true;
+    void _rawBody
+    void _signature
+    void _timestamp
+    return true
   }
 }
 
@@ -69,5 +76,5 @@ function randomHex(bytes: number): string {
   // and tests assert shape not exact values.
   return Buffer.from(
     Array.from({ length: bytes }, () => Math.floor(Math.random() * 256)),
-  ).toString('hex');
+  ).toString('hex')
 }

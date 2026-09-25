@@ -1,4 +1,13 @@
-import { Controller, Get, Param, NotFoundException, Query, BadRequestException, BadGatewayException, Logger } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Param,
+  NotFoundException,
+  Query,
+  BadRequestException,
+  BadGatewayException,
+  Logger,
+} from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createId } from '@paralleldrive/cuid2'
 import { LnurlService } from './lnurl.service'
@@ -30,7 +39,7 @@ function extractErrorReason(err: unknown): string {
 
 @Controller()
 export class LnurlController {
-  private readonly logger = new Logger(LnurlController.name);
+  private readonly logger = new Logger(LnurlController.name)
   constructor(
     private readonly lnurlService: LnurlService,
     private readonly lightsparkService: LightsparkService,
@@ -48,7 +57,8 @@ export class LnurlController {
     }
 
     // Check if username exists and is active
-    const lightningName = await this.lnurlService.findActiveLightningName(rawUsername)
+    const lightningName =
+      await this.lnurlService.findActiveLightningName(rawUsername)
     if (!lightningName) {
       throw new NotFoundException('Username not found')
     }
@@ -83,13 +93,21 @@ export class LnurlController {
       throw new BadRequestException('Missing amount parameter')
     }
 
-    const amountMsat = parseInt(amountStr, 10)
-    if (isNaN(amountMsat) || amountMsat < LNURL_CONSTANTS.MIN_SENDABLE_MSAT || amountMsat > LNURL_CONSTANTS.MAX_SENDABLE_MSAT) {
-      throw new BadRequestException(`Amount must be between ${LNURL_CONSTANTS.MIN_SENDABLE_MSAT} and ${LNURL_CONSTANTS.MAX_SENDABLE_MSAT} msat`)
+    const amountMsat = /^\d+$/.test(amountStr) ? Number(amountStr) : NaN
+    if (
+      !Number.isSafeInteger(amountMsat) ||
+      amountMsat % 1000 !== 0 ||
+      amountMsat < LNURL_CONSTANTS.MIN_SENDABLE_MSAT ||
+      amountMsat > LNURL_CONSTANTS.MAX_SENDABLE_MSAT
+    ) {
+      throw new BadRequestException(
+        `Amount must be between ${LNURL_CONSTANTS.MIN_SENDABLE_MSAT} and ${LNURL_CONSTANTS.MAX_SENDABLE_MSAT} msat`,
+      )
     }
 
     // Load lightning name with associated user (for defaultReceivingCurrency).
-    const lightningName = await this.lnurlService.findActiveLightningNameWithUser(rawUsername)
+    const lightningName =
+      await this.lnurlService.findActiveLightningNameWithUser(rawUsername)
     if (!lightningName) {
       throw new NotFoundException('Username not found')
     }
@@ -102,7 +120,8 @@ export class LnurlController {
     // Kill switch + per-user preference gate.
     const usdbEnabled = this.configService.get<string>('USDB_ENABLED')
     const defaultReceivingCurrency = lightningName.user.defaultReceivingCurrency
-    const useUsdbRoute = usdbEnabled === 'true' && defaultReceivingCurrency === 'USDB'
+    const useUsdbRoute =
+      usdbEnabled === 'true' && defaultReceivingCurrency === 'USDB'
 
     this.logger.log(
       `[${lightningName.username}] callback amount=${amountMsat}, msat route=${useUsdbRoute ? 'usdb' : 'sats'}`,
@@ -117,7 +136,9 @@ export class LnurlController {
         return await this.handleUsdbCallback(lightningName, amountMsat)
       } catch (err: any) {
         const reason = extractErrorReason(err)
-        this.logger.warn(`[${lightningName.username}] usdb unavailable (${reason}), using sats`)
+        this.logger.warn(
+          `[${lightningName.username}] usdb unavailable (${reason}), using sats`,
+        )
       }
     }
     this.logger.log(`[${lightningName.username}] using sats route`)
@@ -129,13 +150,15 @@ export class LnurlController {
       return await this.issueSatsBolt11(lightningName, amountMsat, comment)
     } catch (err: any) {
       const reason = extractErrorReason(err)
-      this.logger.error(`[${lightningName.username}] sats issuance failed: ${reason}`)
+      this.logger.error(
+        `[${lightningName.username}] sats issuance failed: ${reason}`,
+      )
       return { status: 'ERROR', reason }
     }
   }
 
   /**
-   * USDB onramp path. Throws on any failure (encode failure, Flashnet error,
+   * USDB Lightning quote path. Throws on any failure (encode failure, Flashnet error,
    * etc.) so the caller in handleLnurlCallback can fall back to the sats path.
    * On success: returns the BOLT11 invoice and persists Invoice + FlashnetOrder
    * in a single transaction inside SwapService.
@@ -144,13 +167,17 @@ export class LnurlController {
     lightningName: { id: string; linkingPubKeyHex: string; username: string },
     amountMsat: number,
   ): Promise<LnurlCallbackResponseDto> {
-    const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ?? 'MAINNET') as SparkNetwork
-    const recipient = await encodeSparkAddress(lightningName.linkingPubKeyHex, sparkNetwork)
+    const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ??
+      'MAINNET') as SparkNetwork
+    const recipient = await encodeSparkAddress(
+      lightningName.linkingPubKeyHex,
+      sparkNetwork,
+    )
 
     const amountSats = Math.floor(amountMsat / 1000)
     const idempotencyKey = createId()
 
-    const result = await this.swapService.initiateOnramp({
+    const result = await this.swapService.initiateLightningQuote({
       idempotencyKey,
       lightningNameId: lightningName.id,
       amountMsat,
@@ -158,7 +185,9 @@ export class LnurlController {
       recipientSparkAddress: recipient,
     })
 
-    this.logger.log(`[${lightningName.username}] usdb onramp ok (key=${idempotencyKey})`)
+    this.logger.log(
+      `[${lightningName.username}] usdb quote ready (key=${idempotencyKey})`,
+    )
 
     return { pr: result.bolt11, routes: [] }
   }
@@ -172,7 +201,9 @@ export class LnurlController {
     amountMsat: number,
     comment?: string,
   ): Promise<LnurlCallbackResponseDto> {
-    const domain = getDomainFromBaseUrl(this.configService.get<string>('PUBLIC_BASE_URL')!)
+    const domain = getDomainFromBaseUrl(
+      this.configService.get<string>('PUBLIC_BASE_URL')!,
+    )
     const memo = comment
       ? `${lightningName.username}@${domain}: ${comment}`
       : `${lightningName.username}@${domain}`

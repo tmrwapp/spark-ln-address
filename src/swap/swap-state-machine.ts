@@ -1,4 +1,7 @@
-import { FLASHNET_ORDER_STATUS, FlashnetOrderStatus } from './flashnet-order-status'
+import {
+  FLASHNET_ORDER_STATUS,
+  FlashnetOrderStatus,
+} from './flashnet-order-status'
 const {
   PENDING_PAYMENT,
   PROCESSING,
@@ -34,7 +37,10 @@ const {
  * `REFUNDED`.
  */
 
-const ALLOWED_TRANSITIONS: Record<FlashnetOrderStatus, ReadonlySet<FlashnetOrderStatus>> = {
+const ALLOWED_TRANSITIONS: Record<
+  FlashnetOrderStatus,
+  ReadonlySet<FlashnetOrderStatus>
+> = {
   // Local-only initial state.
   [PENDING_PAYMENT]: new Set([PROCESSING]),
 
@@ -63,7 +69,14 @@ const ALLOWED_TRANSITIONS: Record<FlashnetOrderStatus, ReadonlySet<FlashnetOrder
     EXPIRED,
     REFUNDED,
   ]),
-  [BRIDGING]: new Set([SWAPPING, PAUSED, DELIVERING, DELIVERED, FAILED, REFUNDED]),
+  [BRIDGING]: new Set([
+    SWAPPING,
+    PAUSED,
+    DELIVERING,
+    DELIVERED,
+    FAILED,
+    REFUNDED,
+  ]),
   [SWAPPING]: new Set([
     AWAITING_APPROVAL,
     PAUSED,
@@ -85,8 +98,21 @@ const ALLOWED_TRANSITIONS: Record<FlashnetOrderStatus, ReadonlySet<FlashnetOrder
   ]),
   [PAUSED]: new Set([PROCESSING, FAILED]),
   [REFUNDING]: new Set([PAUSED, REFUNDED, FAILED]),
-  [DELIVERING]: new Set([CONFIRMING, PAUSED, REFUNDING, DELIVERED, FAILED, REFUNDED]),
-  [UNFULFILLED]: new Set([CONFIRMING, BRIDGING, SWAPPING, DELIVERING, DELIVERED]),
+  [DELIVERING]: new Set([
+    CONFIRMING,
+    PAUSED,
+    REFUNDING,
+    DELIVERED,
+    FAILED,
+    REFUNDED,
+  ]),
+  [UNFULFILLED]: new Set([
+    CONFIRMING,
+    BRIDGING,
+    SWAPPING,
+    DELIVERING,
+    DELIVERED,
+  ]),
 
   // Terminal states — no outbound transitions.
   [DELIVERED]: new Set(),
@@ -101,7 +127,10 @@ const ALLOWED_TRANSITIONS: Record<FlashnetOrderStatus, ReadonlySet<FlashnetOrder
  * @returns The `next` state (unchanged) on a legal transition.
  * @throws  Error on any illegal transition (including terminal → anything).
  */
-export function validateTransition(current: FlashnetOrderStatus, next: FlashnetOrderStatus): FlashnetOrderStatus {
+export function validateTransition(
+  current: FlashnetOrderStatus,
+  next: FlashnetOrderStatus,
+): FlashnetOrderStatus {
   const allowed = ALLOWED_TRANSITIONS[current]
   if (!allowed) {
     throw new Error(`Unknown current state: "${current}"`)
@@ -170,6 +199,8 @@ export function classifyTransition(
  */
 export function mapEventToStatus(event: string): FlashnetOrderStatus {
   const mapping: Record<string, FlashnetOrderStatus> = {
+    'order.paused': FLASHNET_ORDER_STATUS.PAUSED,
+    'order.expired': FLASHNET_ORDER_STATUS.EXPIRED,
     'order.processing': FLASHNET_ORDER_STATUS.PROCESSING,
     'order.confirming': FLASHNET_ORDER_STATUS.CONFIRMING,
     'order.bridging': FLASHNET_ORDER_STATUS.BRIDGING,

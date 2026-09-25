@@ -4,73 +4,74 @@
  * Example: "920000" = 0.92 USDB. PR5's SwapService owns the conversion to Decimal.
  */
 
-export interface OnrampOrderRequest {
-  destinationChain: 'spark';
-  destinationAsset: 'USDB';
-  recipientAddress: string;
+export interface LightningQuoteRequest {
+  sourceChain: 'lightning'
+  sourceAsset: 'BTC'
+  destinationChain: 'spark'
+  destinationAsset: 'USDB'
+  recipientAddress: string
   /** Amount in satoshis (for exact_in Lightning source), as a string. */
-  amount: string;
-  amountMode: 'exact_in';
-  slippageBps: number;
-  refundAddress?: string;
+  amount: string
+  amountMode: 'exact_in'
+  slippageBps: number
 }
 
-export interface OnrampOrderResponse {
-  orderId: string;
-  quoteId: string;
+export interface LightningQuoteResponse {
+  quoteId: string
   /** The BOLT11 invoice the LN payer should pay. */
-  depositAddress: string;
+  depositAddress: string
   /** Sats in; integer string. */
-  amountIn: string;
+  amountIn: string
   /** USDB out (smallest units, 6 decimals); integer string. */
-  estimatedOut: string;
+  estimatedOut: string
   /** Base fee; integer string, smallest USDB units. */
-  feeAmount: string;
+  feeAmount: string
   /** Rounding dust fee; integer string, smallest USDB units. */
-  roundingFeeAmount: string;
+  roundingFeeAmount: string
   /** Total fee (feeAmount + roundingFeeAmount); integer string. */
-  totalFeeAmount: string;
-  feeBps: number;
-  feeAsset: string;
+  totalFeeAmount: string
+  feeBps: number
+  feeAsset: string
   /** E.g. ["BTC", "USDB"] */
-  route: string[];
-  /** ISO 8601 datetime; quote AND BOLT11 share this TTL (~2 min). */
-  expiresAt: string;
-  priceLockMode: string;
+  route: string[]
+  /** ISO 8601 quote expiry, capped to the invoice expiry before persistence. */
+  expiresAt: string
+  priceLockMode?: string
   /** Minimum USDB guaranteed to the recipient after slippage; integer string. */
-  lockedMinAmountOut: string;
-  amountMode: string;
-  lightningReceiveRequestId: string;
+  lockedMinAmountOut?: string
+  amountMode?: 'exact_in'
+  flexibleAmount?: boolean
+  lightningReceiveRequestId: string
   /** Ephemeral payer affordances; shape may vary. Not persisted in v1. */
-  paymentLinks?: Record<string, unknown>;
+  paymentLinks?: Record<string, unknown>
   /**
    * True when Flashnet replayed a cached response for the same X-Idempotency-Key.
    * Surfaced from the X-Idempotency-Replayed response header by FlashnetService.
    * Always false in FlashnetMockService.
    */
-  replayed: boolean;
+  replayed: boolean
 }
 
 export interface OrderStatusResponse {
-  orderId: string;
+  orderId: string
   /**
    * Flashnet lifecycle status string. Kept as `string` so PR6's state machine
    * can handle transitions without a type-level change when new statuses appear.
    * Known values: processing | confirming | swapping | delivering | completed |
    *               failed | refunding | refunded
    */
-  status: string;
+  status: string
   /** USDB delivered; integer string, smallest units. Present on completed. */
-  amountOut?: string;
+  amountOut?: string
   /** Machine-readable error code; present on failed/refunded. */
-  errorCode?: string;
+  errorCode?: string
   /** Human-readable error message; present on failed/refunded. */
-  errorMessage?: string;
+  errorMessage?: string
 }
 
 /**
  * Error codes returned synchronously on Flashnet HTTP API calls (4xx/5xx).
- * Used in FlashnetService.createOnrampOrder and FlashnetApiError.
+ * Used in FlashnetService.createLightningQuote and FlashnetApiError.
  */
 export type FlashnetApiErrorCode =
   | 'unsupported_route'
@@ -125,14 +126,18 @@ export interface FlashnetApiError {
 export interface FlashnetWebhookData {
   /** Order ID (ord_...). */
   id: string
+  quoteId?: string | null
+  updatedAt?: string
+  reviewStatus?: string
+  feeAsset?: string
   /** Partner-visible order status string. */
   status: string
   /** Output amount in smallest units; null until delivery. */
   amountOut: string | null
-  /** Platform fee in smallest units. Always present. */
-  feeAmount: string
+  /** Platform fee in smallest units when included in the snapshot. */
+  feeAmount?: string
   /** Error details; code/message are null unless order has failed or requires action. */
-  error: {
+  error?: {
     code: string | null
     message: string | null
   }
