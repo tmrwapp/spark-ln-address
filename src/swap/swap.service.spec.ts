@@ -13,15 +13,16 @@ import { FLASHNET_ORDER_STATUS } from './flashnet-order-status'
 
 const MOCK_BOLT11 = 'lnbc1pvjluezpp5mock'
 
-const makeFlashnetMock = (overrides: Partial<ReturnType<typeof baseFlashnetMock>> = {}) => ({
+const makeFlashnetMock = (
+  overrides: Partial<ReturnType<typeof baseFlashnetMock>> = {},
+) => ({
   ...baseFlashnetMock(),
   ...overrides,
 })
 
 function baseFlashnetMock() {
   return {
-    createOnrampOrder: jest.fn().mockResolvedValue({
-      orderId: 'ord_test_001',
+    createLightningQuote: jest.fn().mockResolvedValue({
       quoteId: 'q_test_001',
       depositAddress: MOCK_BOLT11,
       amountIn: '1000',
@@ -91,7 +92,9 @@ describe('SwapService', () => {
     flashnetMock = makeFlashnetMock()
     prismaMock = makePrismaMock()
     refundCaseServiceMock = {
-      createRefundCase: jest.fn().mockResolvedValue({ id: 'rc-mock', status: 'OPEN' }),
+      createRefundCase: jest
+        .fn()
+        .mockResolvedValue({ id: 'rc-mock', status: 'OPEN' }),
     }
 
     const module: TestingModule = await Test.createTestingModule({
@@ -108,15 +111,15 @@ describe('SwapService', () => {
 
   afterEach(() => jest.restoreAllMocks())
 
-  describe('initiateOnramp', () => {
+  describe('initiateLightningQuote', () => {
     it('happy path — calls Flashnet, persists Invoice + FlashnetOrder in one tx, returns { bolt11, replayed: false }', async () => {
-      const result = await service.initiateOnramp(BASE_PARAMS)
+      const result = await service.initiateLightningQuote(BASE_PARAMS)
 
       // Returns the Flashnet BOLT11 and replayed: false
       expect(result).toEqual({ bolt11: MOCK_BOLT11, replayed: false })
 
       // Flashnet called with correct params and idempotency key
-      expect(flashnetMock.createOnrampOrder).toHaveBeenCalledWith(
+      expect(flashnetMock.createLightningQuote).toHaveBeenCalledWith(
         expect.objectContaining({
           destinationChain: 'spark',
           destinationAsset: 'USDB',
@@ -124,10 +127,16 @@ describe('SwapService', () => {
           amount: '1000',
           amountMode: 'exact_in',
           slippageBps: 50,
-          refundAddress: BASE_PARAMS.recipientSparkAddress,
+          sourceChain: 'lightning',
+          sourceAsset: 'BTC',
         }),
         BASE_PARAMS.idempotencyKey,
       )
+
+      const request = flashnetMock.createLightningQuote.mock.calls[0][0]
+      expect(request).not.toHaveProperty('refundAddress')
+      expect(request).not.toHaveProperty('amountFiatUsd')
+      expect(request).not.toHaveProperty('flexibleAmount')
 
       // Transaction ran once
       expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
@@ -138,17 +147,26 @@ describe('SwapService', () => {
       expect(txInvoiceCreate.data.bolt11).toBe(MOCK_BOLT11)
       expect(txInvoiceCreate.data.usernameId).toBe(BASE_PARAMS.lightningNameId)
       expect(txInvoiceCreate.data.receivingCurrency).toBe('USDB')
-      expect(txInvoiceCreate.data.destinationSparkAddress).toBe(BASE_PARAMS.recipientSparkAddress)
+      expect(txInvoiceCreate.data.destinationSparkAddress).toBe(
+        BASE_PARAMS.recipientSparkAddress,
+      )
 
       // FlashnetOrder created with correct invoiceId
-      const txOrderCreate = prismaMock._txMock.flashnetOrder.create.mock.calls[0][0]
+      const txOrderCreate =
+        prismaMock._txMock.flashnetOrder.create.mock.calls[0][0]
       expect(txOrderCreate.data.invoiceId).toBe(BASE_PARAMS.idempotencyKey)
-      expect(txOrderCreate.data.orderId).toBe('ord_test_001')
-      expect(txOrderCreate.data.status).toBe(FLASHNET_ORDER_STATUS.PENDING_PAYMENT)
+      expect(txOrderCreate.data.orderId).toBeNull()
+      expect(txOrderCreate.data.status).toBe(
+        FLASHNET_ORDER_STATUS.PENDING_PAYMENT,
+      )
       // "920000" smallest units → 0.92 USDB
-      expect(txOrderCreate.data.estimatedOut.equals(new Prisma.Decimal('0.92'))).toBe(true)
+      expect(
+        txOrderCreate.data.estimatedOut.equals(new Prisma.Decimal('0.92')),
+      ).toBe(true)
       // "10000" → 0.01 USDB
-      expect(txOrderCreate.data.feeAmount.equals(new Prisma.Decimal('0.01'))).toBe(true)
+      expect(
+        txOrderCreate.data.feeAmount.equals(new Prisma.Decimal('0.01')),
+      ).toBe(true)
       // route stored as JSON string
       expect(txOrderCreate.data.route).toBe('["BTC","USDB"]')
     })
@@ -158,11 +176,15 @@ describe('SwapService', () => {
     // -------------------------------------------------------------------------
 
     it('asserts all six USDB decimal fields are converted correctly', async () => {
-      const result = await service.initiateOnramp({ ...BASE_PARAMS, idempotencyKey: 'inv_amounts' })
+      const result = await service.initiateLightningQuote({
+        ...BASE_PARAMS,
+        idempotencyKey: 'inv_amounts',
+      })
 
       expect(result.bolt11).toBe(MOCK_BOLT11)
 
-      const txOrderCreate = prismaMock._txMock.flashnetOrder.create.mock.calls[0][0]
+      const txOrderCreate =
+        prismaMock._txMock.flashnetOrder.create.mock.calls[0][0]
       const d = txOrderCreate.data
 
       // estimatedOut: "920000" → 0.92
@@ -170,11 +192,15 @@ describe('SwapService', () => {
       // feeAmount: "10000" → 0.01
       expect(d.feeAmount.equals(new Prisma.Decimal('0.01'))).toBe(true)
       // roundingFeeAmount: "2162" → 0.002162
-      expect(d.roundingFeeAmount.equals(new Prisma.Decimal('0.002162'))).toBe(true)
+      expect(d.roundingFeeAmount.equals(new Prisma.Decimal('0.002162'))).toBe(
+        true,
+      )
       // totalFeeAmount: "12162" → 0.012162
       expect(d.totalFeeAmount.equals(new Prisma.Decimal('0.012162'))).toBe(true)
       // lockedMinAmountOut: "838945" → 0.838945
-      expect(d.lockedMinAmountOut.equals(new Prisma.Decimal('0.838945'))).toBe(true)
+      expect(d.lockedMinAmountOut.equals(new Prisma.Decimal('0.838945'))).toBe(
+        true,
+      )
       // non-USDB fields pass through unchanged
       expect(d.feeBps).toBe(41)
       expect(d.feeAsset).toBe('USDB')
@@ -183,18 +209,21 @@ describe('SwapService', () => {
 
     it('Flashnet error — rethrows and does NOT call prisma.$transaction', async () => {
       const flashnetError = new Error('service_unavailable')
-      flashnetMock.createOnrampOrder.mockRejectedValueOnce(flashnetError)
+      flashnetMock.createLightningQuote.mockRejectedValueOnce(flashnetError)
 
       await expect(
-        service.initiateOnramp({ ...BASE_PARAMS, idempotencyKey: 'inv_err' }),
+        service.initiateLightningQuote({
+          ...BASE_PARAMS,
+          idempotencyKey: 'inv_err',
+        }),
       ).rejects.toThrow('service_unavailable')
 
       expect(prismaMock.$transaction).not.toHaveBeenCalled()
     })
 
     it('replayed: true with existing FlashnetOrder — returns stored bolt11 without calling $transaction', async () => {
-      flashnetMock.createOnrampOrder.mockResolvedValueOnce({
-        ...baseFlashnetMock().createOnrampOrder.mock.results[0]?.value,
+      flashnetMock.createLightningQuote.mockResolvedValueOnce({
+        ...baseFlashnetMock().createLightningQuote.mock.results[0]?.value,
         orderId: 'ord_replayed',
         quoteId: 'q_replayed',
         depositAddress: MOCK_BOLT11,
@@ -215,10 +244,14 @@ describe('SwapService', () => {
       })
 
       // Simulate existing FlashnetOrder row in DB
-      prismaMock.flashnetOrder.findUnique.mockResolvedValueOnce({ invoiceId: 'inv_replayed' })
-      prismaMock.invoice.findUnique.mockResolvedValueOnce({ bolt11: 'lnbc1_stored_bolt11' })
+      prismaMock.flashnetOrder.findUnique.mockResolvedValueOnce({
+        invoiceId: 'inv_replayed',
+      })
+      prismaMock.invoice.findUnique.mockResolvedValueOnce({
+        bolt11: 'lnbc1_stored_bolt11',
+      })
 
-      const result = await service.initiateOnramp({
+      const result = await service.initiateLightningQuote({
         ...BASE_PARAMS,
         idempotencyKey: 'inv_replayed',
       })
@@ -230,7 +263,7 @@ describe('SwapService', () => {
     })
 
     it('replayed: true with NO existing FlashnetOrder (crash-row scenario) — falls through to persist', async () => {
-      flashnetMock.createOnrampOrder.mockResolvedValueOnce({
+      flashnetMock.createLightningQuote.mockResolvedValueOnce({
         orderId: 'ord_crash_recover',
         quoteId: 'q_crash_recover',
         depositAddress: MOCK_BOLT11,
@@ -253,7 +286,7 @@ describe('SwapService', () => {
       // No existing FlashnetOrder — crash-recovery path
       prismaMock.flashnetOrder.findUnique.mockResolvedValueOnce(null)
 
-      const result = await service.initiateOnramp({
+      const result = await service.initiateLightningQuote({
         ...BASE_PARAMS,
         idempotencyKey: 'inv_crash',
       })
@@ -264,7 +297,7 @@ describe('SwapService', () => {
     })
 
     it('replayed: true with existing FlashnetOrder but invoice bolt11 is null — falls back to response bolt11', async () => {
-      flashnetMock.createOnrampOrder.mockResolvedValueOnce({
+      flashnetMock.createLightningQuote.mockResolvedValueOnce({
         orderId: 'ord_null_bolt11',
         quoteId: 'q_null_bolt11',
         depositAddress: MOCK_BOLT11,
@@ -284,11 +317,13 @@ describe('SwapService', () => {
         replayed: true,
       })
 
-      prismaMock.flashnetOrder.findUnique.mockResolvedValueOnce({ invoiceId: 'inv_null' })
+      prismaMock.flashnetOrder.findUnique.mockResolvedValueOnce({
+        invoiceId: 'inv_null',
+      })
       // Invoice bolt11 is null — tests the ?. nullish fallback
       prismaMock.invoice.findUnique.mockResolvedValueOnce({ bolt11: null })
 
-      const result = await service.initiateOnramp({
+      const result = await service.initiateLightningQuote({
         ...BASE_PARAMS,
         idempotencyKey: 'inv_null',
       })
@@ -324,24 +359,110 @@ describe('SwapService', () => {
       },
     }
 
+    it('binds the first funded order by quote ID even when completion arrives first', async () => {
+      prismaMock._txMock.flashnetOrder.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...BASE_ORDER,
+          orderId: null,
+          status: FLASHNET_ORDER_STATUS.PENDING_PAYMENT,
+        })
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        data: {
+          ...BASE_PAYLOAD.data,
+          quoteId: BASE_ORDER.quoteId,
+          error: null,
+        },
+      })
+      expect(
+        prismaMock._txMock.flashnetOrder.findFirst,
+      ).toHaveBeenNthCalledWith(2, {
+        where: { quoteId: BASE_ORDER.quoteId, orderId: null },
+        include: { invoice: true },
+      })
+      expect(prismaMock._txMock.flashnetOrder.update).toHaveBeenCalledWith({
+        where: { id: BASE_ORDER.id },
+        data: { orderId: BASE_ORDER.orderId },
+      })
+      expect(prismaMock._txMock.flashnetOrder.update).toHaveBeenLastCalledWith({
+        where: { id: BASE_ORDER.id },
+        data: expect.objectContaining({ status: 'DELIVERED' }),
+      })
+    })
+
+    it.each(['PAUSED', 'AWAITING_APPROVAL', 'PENDING_PAYMENT'])(
+      'reconciles completion from %s after missed intermediate events',
+      async (status) => {
+        prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+          ...BASE_ORDER,
+          status,
+        })
+        await service.applyWebhookEvent(BASE_PAYLOAD)
+        expect(prismaMock._txMock.flashnetOrder.update).toHaveBeenCalledWith({
+          where: { id: BASE_ORDER.id },
+          data: expect.objectContaining({ status: 'DELIVERED' }),
+        })
+      },
+    )
+
+    it('refuses an order whose quote differs from the persisted quote', async () => {
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(
+        BASE_ORDER,
+      )
+      await expect(
+        service.applyWebhookEvent({
+          ...BASE_PAYLOAD,
+          data: { ...BASE_PAYLOAD.data, quoteId: 'q_other' },
+        }),
+      ).rejects.toThrow('Order quote does not match')
+      expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
+    })
+
+    it.each(['DELIVERED', 'REFUNDED', 'FAILED', 'EXPIRED'])(
+      'does not open a recovery case after %s',
+      async (status) => {
+        prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce({
+          ...BASE_ORDER,
+          status,
+        })
+        await service.applyWebhookEvent({
+          ...BASE_PAYLOAD,
+          event: 'order.recovery_required',
+        })
+        expect(refundCaseServiceMock.createRefundCase).not.toHaveBeenCalled()
+      },
+    )
+
     it('order.completed — updates status to DELIVERED, sets actualOut, marks processedAt', async () => {
       prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
         id: 'wh-1',
         processedAt: null,
       })
-      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(BASE_ORDER)
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(
+        BASE_ORDER,
+      )
 
       await service.applyWebhookEvent(BASE_PAYLOAD)
 
       expect(prismaMock.$transaction).toHaveBeenCalledTimes(1)
 
+      expect(prismaMock.$transaction).toHaveBeenCalledWith(
+        expect.any(Function),
+        { isolationLevel: 'Serializable' },
+      )
+
       // FlashnetOrder updated with DELIVERED status and actualOut.
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
-      expect(updateCall.data.actualOut.equals(new Prisma.Decimal('0.92'))).toBe(true)
+      expect(updateCall.data.actualOut.equals(new Prisma.Decimal('0.92'))).toBe(
+        true,
+      )
 
       // Webhook event marked as processed.
-      const whUpdate = prismaMock._txMock.flashnetWebhookEvent.update.mock.calls[0][0]
+      const whUpdate =
+        prismaMock._txMock.flashnetWebhookEvent.update.mock.calls[0][0]
       expect(whUpdate.data.processedAt).toBeInstanceOf(Date)
     })
 
@@ -358,7 +479,7 @@ describe('SwapService', () => {
       expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
     })
 
-    it('unknown orderId — logs warning and marks event processed, does not update FlashnetOrder', async () => {
+    it('unknown order stays unprocessed for reconciliation after a persistence race', async () => {
       prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
         id: 'wh-2',
         processedAt: null,
@@ -366,11 +487,16 @@ describe('SwapService', () => {
       // No matching FlashnetOrder row.
       prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(null)
 
-      await service.applyWebhookEvent({ ...BASE_PAYLOAD, data: { ...BASE_PAYLOAD.data, id: 'ord_unknown' } })
+      await service.applyWebhookEvent({
+        ...BASE_PAYLOAD,
+        data: { ...BASE_PAYLOAD.data, id: 'ord_unknown' },
+      })
 
       expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
-      // Webhook event still marked processed to prevent repeated log spam.
-      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
+      // A later reconciliation must still be able to apply this event.
+      expect(
+        prismaMock._txMock.flashnetWebhookEvent.update,
+      ).not.toHaveBeenCalled()
     })
 
     it('stale transition (DELIVERED → FAILED) — does not throw, marks webhook processed, leaves order untouched', async () => {
@@ -395,8 +521,12 @@ describe('SwapService', () => {
       })
 
       expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
-      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ignored (stale)'))
+      expect(
+        prismaMock._txMock.flashnetWebhookEvent.update,
+      ).toHaveBeenCalledTimes(1)
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ignored (stale)'),
+      )
     })
 
     it('idempotent redelivery (DELIVERING → DELIVERING) — no order update, marks webhook processed', async () => {
@@ -416,7 +546,9 @@ describe('SwapService', () => {
       })
 
       expect(prismaMock._txMock.flashnetOrder.update).not.toHaveBeenCalled()
-      expect(prismaMock._txMock.flashnetWebhookEvent.update).toHaveBeenCalledTimes(1)
+      expect(
+        prismaMock._txMock.flashnetWebhookEvent.update,
+      ).toHaveBeenCalledTimes(1)
     })
 
     it('DELIVERING → FAILED — calls RefundCaseService.createRefundCase with tx', async () => {
@@ -443,7 +575,7 @@ describe('SwapService', () => {
       )
     })
 
-    it('non-DELIVERING failure (e.g. SWAPPING → FAILED) — does NOT create a refund case', async () => {
+    it('non-DELIVERING failure (e.g. SWAPPING → FAILED) — opens a recovery case', async () => {
       prismaMock._txMock.flashnetWebhookEvent.upsert.mockResolvedValueOnce({
         id: 'wh-4b',
         processedAt: null,
@@ -459,7 +591,7 @@ describe('SwapService', () => {
         data: { ...BASE_PAYLOAD.data, error: { code: null, message: null } },
       })
 
-      expect(refundCaseServiceMock.createRefundCase).not.toHaveBeenCalled()
+      expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledTimes(1)
     })
 
     it('DELIVERING → DELIVERED (happy path) — does NOT create a refund case', async () => {
@@ -475,7 +607,11 @@ describe('SwapService', () => {
       await service.applyWebhookEvent({
         ...BASE_PAYLOAD,
         event: 'order.completed',
-        data: { ...BASE_PAYLOAD.data, amountOut: '1000000', error: { code: null, message: null } },
+        data: {
+          ...BASE_PAYLOAD.data,
+          amountOut: '1000000',
+          error: { code: null, message: null },
+        },
       })
 
       expect(refundCaseServiceMock.createRefundCase).not.toHaveBeenCalled()
@@ -503,14 +639,20 @@ describe('SwapService', () => {
           status: 'refunding',
           amountOut: null,
           feeAmount: '10000',
-          error: { code: 'slippage_exceeded', message: 'Pool moved past slippage tolerance' },
+          error: {
+            code: 'slippage_exceeded',
+            message: 'Pool moved past slippage tolerance',
+          },
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.REFUNDING)
       expect(updateCall.data.errorCode).toBe('slippage_exceeded')
-      expect(updateCall.data.errorMessage).toBe('Pool moved past slippage tolerance')
+      expect(updateCall.data.errorMessage).toBe(
+        'Pool moved past slippage tolerance',
+      )
     })
 
     it('order.completed with null amountOut — does not set actualOut', async () => {
@@ -535,7 +677,8 @@ describe('SwapService', () => {
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
       expect(updateCall.data.actualOut).toBeUndefined()
     })
@@ -558,7 +701,9 @@ describe('SwapService', () => {
         id: 'wh-7',
         processedAt: null,
       })
-      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(DELIVERING_ORDER)
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(
+        DELIVERING_ORDER,
+      )
 
       await service.applyWebhookEvent({
         event: 'order.failed',
@@ -568,7 +713,10 @@ describe('SwapService', () => {
           status: 'failed',
           amountOut: null,
           feeAmount: '10000',
-          error: { code: 'delivery_aborted', message: 'destination unreachable' },
+          error: {
+            code: 'delivery_aborted',
+            message: 'destination unreachable',
+          },
         },
       })
 
@@ -576,7 +724,7 @@ describe('SwapService', () => {
         {
           invoiceId: 'inv-2',
           amountSats: 2000,
-          reason: 'DELIVERING_FAILED: delivery_aborted | destination unreachable',
+          reason: 'PAYMENT_FAILED: delivery_aborted | destination unreachable',
         },
         prismaMock._txMock,
       )
@@ -596,7 +744,9 @@ describe('SwapService', () => {
         id: 'wh-8',
         processedAt: null,
       })
-      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(DELIVERING_ORDER)
+      prismaMock._txMock.flashnetOrder.findFirst.mockResolvedValueOnce(
+        DELIVERING_ORDER,
+      )
 
       await service.applyWebhookEvent({
         event: 'order.failed',
@@ -612,7 +762,7 @@ describe('SwapService', () => {
 
       expect(refundCaseServiceMock.createRefundCase).toHaveBeenCalledWith(
         expect.objectContaining({
-          reason: 'DELIVERING_FAILED: no_code | no_message',
+          reason: 'PAYMENT_FAILED: no_code | no_message',
         }),
         prismaMock._txMock,
       )
@@ -640,11 +790,15 @@ describe('SwapService', () => {
           status: 'refunded',
           amountOut: null,
           feeAmount: '10000',
-          error: { code: 'slippage_exceeded', message: 'Slippage limit exceeded' },
+          error: {
+            code: 'slippage_exceeded',
+            message: 'Slippage limit exceeded',
+          },
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.REFUNDED)
       // error fields from data.error are persisted.
       expect(updateCall.data.errorCode).toBe('slippage_exceeded')
@@ -673,11 +827,15 @@ describe('SwapService', () => {
           status: 'failed',
           amountOut: null,
           feeAmount: '10000',
-          error: { code: 'delivery_failed', message: 'Payment delivery failed' },
+          error: {
+            code: 'delivery_failed',
+            message: 'Payment delivery failed',
+          },
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.errorCode).toBe('delivery_failed')
       expect(updateCall.data.errorMessage).toBe('Payment delivery failed')
     })
@@ -704,7 +862,8 @@ describe('SwapService', () => {
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.errorCode).toBe('target_unmet')
       expect(updateCall.data.errorMessage).toBeUndefined()
     })
@@ -731,7 +890,8 @@ describe('SwapService', () => {
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.errorCode).toBeUndefined()
       expect(updateCall.data.errorMessage).toBe('Delivery node unreachable')
     })
@@ -758,10 +918,15 @@ describe('SwapService', () => {
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.DELIVERED)
-      expect(updateCall.data.actualOut.equals(new Prisma.Decimal('0.915'))).toBe(true)
-      expect(updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0105'))).toBe(true)
+      expect(
+        updateCall.data.actualOut.equals(new Prisma.Decimal('0.915')),
+      ).toBe(true)
+      expect(
+        updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0105')),
+      ).toBe(true)
     })
 
     it('order.swapping from CONFIRMING — advances status to SWAPPING and refreshes feeAmount', async () => {
@@ -786,9 +951,12 @@ describe('SwapService', () => {
         },
       })
 
-      const updateCall = prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
+      const updateCall =
+        prismaMock._txMock.flashnetOrder.update.mock.calls[0][0]
       expect(updateCall.data.status).toBe(FLASHNET_ORDER_STATUS.SWAPPING)
-      expect(updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0095'))).toBe(true)
+      expect(
+        updateCall.data.feeAmount.equals(new Prisma.Decimal('0.0095')),
+      ).toBe(true)
     })
   })
 })

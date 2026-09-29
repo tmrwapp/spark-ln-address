@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing'
-import { NotFoundException, BadRequestException, BadGatewayException } from '@nestjs/common'
+import {
+  NotFoundException,
+  BadRequestException,
+  BadGatewayException,
+} from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { LnurlController } from './lnurl.controller'
 import { LnurlService } from './lnurl.service'
@@ -17,7 +21,8 @@ const MOCK_SPARK_ADDRESS = 'spark1qmockaddress'
 const MOCK_LIGHTNING_NAME_USDB = {
   id: 'ln-1',
   username: 'alice',
-  linkingPubKeyHex: '02a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+  linkingPubKeyHex:
+    '02a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   active: true,
   userId: 'u-1',
   user: {
@@ -38,7 +43,9 @@ const MOCK_LIGHTNING_NAME_SATS = {
 // Factory helpers
 // ---------------------------------------------------------------------------
 
-function makeConfigService(overrides: Record<string, string | undefined> = {}): Partial<ConfigService> {
+function makeConfigService(
+  overrides: Record<string, string | undefined> = {},
+): Partial<ConfigService> {
   const defaults: Record<string, string | undefined> = {
     PUBLIC_BASE_URL: 'https://pay.example.com',
     USDB_ENABLED: 'true',
@@ -52,21 +59,30 @@ function makeConfigService(overrides: Record<string, string | undefined> = {}): 
 
 function makeLnurlServiceMock() {
   return {
-    findActiveLightningNameWithUser: jest.fn().mockResolvedValue(MOCK_LIGHTNING_NAME_USDB),
-    findActiveLightningName: jest.fn().mockResolvedValue(MOCK_LIGHTNING_NAME_USDB),
+    findActiveLightningNameWithUser: jest
+      .fn()
+      .mockResolvedValue(MOCK_LIGHTNING_NAME_USDB),
+    findActiveLightningName: jest
+      .fn()
+      .mockResolvedValue(MOCK_LIGHTNING_NAME_USDB),
     createInvoice: jest.fn().mockResolvedValue({ id: 'inv-placeholder-1' }),
   }
 }
 
 function makeSwapServiceMock() {
   return {
-    initiateOnramp: jest.fn().mockResolvedValue({ bolt11: MOCK_BOLT11, replayed: false }),
+    initiateLightningQuote: jest
+      .fn()
+      .mockResolvedValue({ bolt11: MOCK_BOLT11, replayed: false }),
   }
 }
 
 function makeLightsparkServiceMock() {
   return {
-    createInvoice: jest.fn().mockResolvedValue({ bolt11: 'lnbc1_sats_bolt11', expiresAt: new Date() }),
+    createInvoice: jest.fn().mockResolvedValue({
+      bolt11: 'lnbc1_sats_bolt11',
+      expiresAt: new Date(),
+    }),
   }
 }
 
@@ -110,6 +126,17 @@ describe('LnurlController', () => {
     jest.restoreAllMocks()
   })
 
+  it.each(['1001', '1000junk', '1e3', '1000.5', '-1000'])(
+    'rejects an amount that cannot be represented exactly in sats: %s',
+    async (amount) => {
+      await expect(
+        controller.handleLnurlCallback('alice', amount),
+      ).rejects.toBeInstanceOf(BadRequestException)
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
+      expect(lightsparkService.createInvoice).not.toHaveBeenCalled()
+    },
+  )
+
   // -------------------------------------------------------------------------
   // getLnurlPayMetadata
   // -------------------------------------------------------------------------
@@ -147,7 +174,9 @@ describe('LnurlController', () => {
 
       // LUD-16: must carry both text/plain and text/identifier entries
       const plain = parsed.find(([type]: string[]) => type === 'text/plain')
-      const identifier = parsed.find(([type]: string[]) => type === 'text/identifier')
+      const identifier = parsed.find(
+        ([type]: string[]) => type === 'text/identifier',
+      )
 
       expect(plain).toBeDefined()
       expect(identifier).toBeDefined()
@@ -160,7 +189,9 @@ describe('LnurlController', () => {
     it('throws NotFoundException for unknown username', async () => {
       lnurlService.findActiveLightningName.mockResolvedValueOnce(null)
 
-      await expect(controller.getLnurlPayMetadata('ghost')).rejects.toThrow(NotFoundException)
+      await expect(controller.getLnurlPayMetadata('ghost')).rejects.toThrow(
+        NotFoundException,
+      )
     })
   })
 
@@ -187,7 +218,7 @@ describe('LnurlController', () => {
       const result = await ctrl.handleLnurlCallback('alice', '1000')
 
       // Kill switch: swap service must NOT be called
-      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
       // SATS path calls lightspark
       expect(lightsparkService.createInvoice).toHaveBeenCalled()
       expect(result).toMatchObject({ pr: 'lnbc1_sats_bolt11', routes: [] })
@@ -210,7 +241,7 @@ describe('LnurlController', () => {
 
       const result = await ctrl.handleLnurlCallback('alice', '1000')
 
-      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
       expect(lightsparkService.createInvoice).toHaveBeenCalled()
       expect(result).toMatchObject({ pr: 'lnbc1_sats_bolt11', routes: [] })
     })
@@ -221,7 +252,7 @@ describe('LnurlController', () => {
   // -------------------------------------------------------------------------
 
   describe('handleLnurlCallback — routing', () => {
-    it('USDB_ENABLED=true + USDB preference → calls SwapService.initiateOnramp with idempotencyKey, no prior DB write, returns bolt11', async () => {
+    it('USDB_ENABLED=true + USDB preference → calls SwapService.initiateLightningQuote with idempotencyKey, no prior DB write, returns bolt11', async () => {
       const result = await controller.handleLnurlCallback('alice', '5000')
 
       expect(encodeSparkAddressSpy).toHaveBeenCalledWith(
@@ -233,7 +264,7 @@ describe('LnurlController', () => {
       expect(lnurlService.createInvoice).not.toHaveBeenCalled()
 
       // SwapService called with idempotencyKey, lightningNameId, amountMsat, amountSats, recipientSparkAddress
-      expect(swapService.initiateOnramp).toHaveBeenCalledWith(
+      expect(swapService.initiateLightningQuote).toHaveBeenCalledWith(
         expect.objectContaining({
           lightningNameId: 'ln-1',
           amountMsat: 5000,
@@ -242,7 +273,8 @@ describe('LnurlController', () => {
         }),
       )
       // idempotencyKey is a cuid string — just verify it's a non-empty string
-      const callArg = (swapService.initiateOnramp as jest.Mock).mock.calls[0][0]
+      const callArg = (swapService.initiateLightningQuote as jest.Mock).mock
+        .calls[0][0]
       expect(typeof callArg.idempotencyKey).toBe('string')
       expect(callArg.idempotencyKey.length).toBeGreaterThan(0)
 
@@ -253,25 +285,27 @@ describe('LnurlController', () => {
     })
 
     it('SATS preference with USDB_ENABLED=true → SATS path, SwapService NOT called', async () => {
-      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(MOCK_LIGHTNING_NAME_SATS)
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(
+        MOCK_LIGHTNING_NAME_SATS,
+      )
 
       const result = await controller.handleLnurlCallback('alice', '2000')
 
-      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
       expect(lightsparkService.createInvoice).toHaveBeenCalled()
       expect(result).toMatchObject({ pr: 'lnbc1_sats_bolt11', routes: [] })
     })
 
     it('throws BadRequestException when amount parameter is missing', async () => {
-      await expect(controller.handleLnurlCallback('alice', undefined as any)).rejects.toThrow(
-        BadRequestException,
-      )
+      await expect(
+        controller.handleLnurlCallback('alice', undefined as any),
+      ).rejects.toThrow(BadRequestException)
     })
 
     it('throws BadRequestException when amount is below MIN_SENDABLE_MSAT', async () => {
-      await expect(controller.handleLnurlCallback('alice', '500')).rejects.toThrow(
-        BadRequestException,
-      )
+      await expect(
+        controller.handleLnurlCallback('alice', '500'),
+      ).rejects.toThrow(BadRequestException)
     })
 
     it('throws BadRequestException when amount is above MAX_SENDABLE_MSAT', async () => {
@@ -283,9 +317,9 @@ describe('LnurlController', () => {
     it('throws NotFoundException when username is not found', async () => {
       lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(null)
 
-      await expect(controller.handleLnurlCallback('ghost', '1000')).rejects.toThrow(
-        NotFoundException,
-      )
+      await expect(
+        controller.handleLnurlCallback('ghost', '1000'),
+      ).rejects.toThrow(NotFoundException)
     })
 
     it('throws BadRequestException when linkingPubKeyHex is missing', async () => {
@@ -294,9 +328,9 @@ describe('LnurlController', () => {
         linkingPubKeyHex: null,
       })
 
-      await expect(controller.handleLnurlCallback('alice', '1000')).rejects.toThrow(
-        BadRequestException,
-      )
+      await expect(
+        controller.handleLnurlCallback('alice', '1000'),
+      ).rejects.toThrow(BadRequestException)
     })
   })
 
@@ -311,17 +345,24 @@ describe('LnurlController', () => {
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
-      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
       expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
       expect(lnurlService.createInvoice).toHaveBeenCalledTimes(1)
       expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usdb unavailable'))
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('using sats'))
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('usdb unavailable'),
+      )
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('using sats'),
+      )
     })
 
-    it('SwapService.initiateOnramp throws BadGatewayException → falls back to sats; warn includes the code', async () => {
-      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
-      swapService.initiateOnramp.mockRejectedValueOnce(apiError)
+    it('SwapService.initiateLightningQuote throws BadGatewayException → falls back to sats; warn includes the code', async () => {
+      const apiError = new BadGatewayException({
+        code: 'unsupported_route',
+        message: 'Route not supported',
+      })
+      swapService.initiateLightningQuote.mockRejectedValueOnce(apiError)
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
 
       const result = await controller.handleLnurlCallback('alice', '1000')
@@ -329,24 +370,28 @@ describe('LnurlController', () => {
       expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
       expect(lnurlService.createInvoice).toHaveBeenCalledTimes(1)
       expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unsupported_route'))
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('unsupported_route'),
+      )
     })
 
-    it('SwapService.initiateOnramp throws plain Error → falls back to sats; warn includes the message', async () => {
+    it('SwapService.initiateLightningQuote throws plain Error → falls back to sats; warn includes the message', async () => {
       const plainError = new Error('service_unavailable')
-      swapService.initiateOnramp.mockRejectedValueOnce(plainError)
+      swapService.initiateLightningQuote.mockRejectedValueOnce(plainError)
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
       expect(lightsparkService.createInvoice).toHaveBeenCalledTimes(1)
       expect(result).toEqual({ pr: 'lnbc1_sats_bolt11', routes: [] })
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('service_unavailable'))
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('service_unavailable'),
+      )
     })
 
-    it('SwapService.initiateOnramp throws non-Error object → falls back to sats; warn shows "unknown"', async () => {
+    it('SwapService.initiateLightningQuote throws non-Error object → falls back to sats; warn shows "unknown"', async () => {
       // Non-Error throw with no message or response.code
-      swapService.initiateOnramp.mockRejectedValueOnce({ code: 42 })
+      swapService.initiateLightningQuote.mockRejectedValueOnce({ code: 42 })
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
 
       const result = await controller.handleLnurlCallback('alice', '1000')
@@ -359,30 +404,43 @@ describe('LnurlController', () => {
 
   describe('handleLnurlCallback — LUD-06 error response on issuance failure', () => {
     it('USDB throws AND sats fallback throws → returns { status: ERROR, reason }', async () => {
-      const apiError = new BadGatewayException({ code: 'unsupported_route', message: 'Route not supported' })
-      swapService.initiateOnramp.mockRejectedValueOnce(apiError)
-      lightsparkService.createInvoice.mockRejectedValueOnce(new Error('lightspark down'))
+      const apiError = new BadGatewayException({
+        code: 'unsupported_route',
+        message: 'Route not supported',
+      })
+      swapService.initiateLightningQuote.mockRejectedValueOnce(apiError)
+      lightsparkService.createInvoice.mockRejectedValueOnce(
+        new Error('lightspark down'),
+      )
       const errorSpy = jest.spyOn(controller['logger'], 'error')
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
       expect(result).toEqual({ status: 'ERROR', reason: 'lightspark down' })
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sats issuance failed'))
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('sats issuance failed'),
+      )
     })
 
     it('SATS-preference user with lightspark failure → returns { status: ERROR, reason }', async () => {
-      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(MOCK_LIGHTNING_NAME_SATS)
-      lightsparkService.createInvoice.mockRejectedValueOnce(new Error('lightspark down'))
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(
+        MOCK_LIGHTNING_NAME_SATS,
+      )
+      lightsparkService.createInvoice.mockRejectedValueOnce(
+        new Error('lightspark down'),
+      )
 
       const result = await controller.handleLnurlCallback('alice', '1000')
 
       expect(result).toEqual({ status: 'ERROR', reason: 'lightspark down' })
       // No Flashnet attempt for a SATS-preference user
-      expect(swapService.initiateOnramp).not.toHaveBeenCalled()
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
     })
 
     it('non-Error throw from lightspark → returns { status: ERROR, reason: "unknown" }', async () => {
-      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(MOCK_LIGHTNING_NAME_SATS)
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(
+        MOCK_LIGHTNING_NAME_SATS,
+      )
       lightsparkService.createInvoice.mockRejectedValueOnce({ broken: true })
 
       const result = await controller.handleLnurlCallback('alice', '1000')

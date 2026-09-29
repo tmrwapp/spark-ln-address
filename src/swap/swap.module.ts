@@ -1,3 +1,5 @@
+import { ConfigModule } from '@nestjs/config'
+import { QuoteReconciler } from './quote-reconciler.service'
 import { Module } from '@nestjs/common'
 import { FlashnetModule } from '../flashnet/flashnet.module'
 import { PrismaService } from '../prisma/prisma.service'
@@ -6,9 +8,9 @@ import { SwapService } from './swap.service'
 import { FlashnetWebhookController } from './flashnet-webhook.controller'
 
 @Module({
-  imports: [FlashnetModule, RefundCaseModule],
+  imports: [ConfigModule, FlashnetModule, RefundCaseModule],
   controllers: [FlashnetWebhookController],
-  providers: [SwapService, PrismaService],
+  providers: [QuoteReconciler, SwapService, PrismaService],
   exports: [SwapService],
 })
 export class SwapModule {}

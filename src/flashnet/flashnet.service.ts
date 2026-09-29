@@ -3,83 +3,117 @@ import {
   Injectable,
   Logger,
   ServiceUnavailableException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createHmac, timingSafeEqual } from 'crypto';
+} from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
+import { createHmac, timingSafeEqual } from 'crypto'
 import {
   FlashnetApiError,
-  OnrampOrderRequest,
-  OnrampOrderResponse,
+  FlashnetWebhookData,
+  LightningQuoteRequest,
+  LightningQuoteResponse,
   OrderStatusResponse,
-} from './flashnet.types';
+} from './flashnet.types'
+import { validateLightningQuote } from './lightning-quote-validation'
 
 @Injectable()
 export class FlashnetService {
-  private readonly logger = new Logger(FlashnetService.name);
+  private readonly logger = new Logger(FlashnetService.name)
 
-  private readonly apiBase: string;
-  private readonly apiKey: string;
-  private readonly webhookSecret: string;
+  private readonly apiBase: string
+  private readonly apiKey: string
+  private readonly webhookSecret: string
 
   constructor(private readonly config: ConfigService) {
     this.apiBase =
       this.config.get<string>('FLASHNET_API_BASE') ??
-      'https://orchestration.flashnet.xyz';
-    this.apiKey = this.config.get<string>('FLASHNET_API_KEY') ?? '';
+      'https://orchestration.flashnet.xyz'
+    this.apiKey = this.config.get<string>('FLASHNET_API_KEY') ?? ''
     this.webhookSecret =
-      this.config.get<string>('FLASHNET_WEBHOOK_SECRET') ?? '';
+      this.config.get<string>('FLASHNET_WEBHOOK_SECRET') ?? ''
   }
 
   /**
-   * POST /v1/orchestration/onramp
-   * Creates a USDB onramp order. Flashnet issues the BOLT11, takes the LN
+   * POST /v1/orchestration/quote
+   * Creates a Lightning-funded USDB quote. The order exists only after the LN
    * payment, swaps BTC→USDB, and delivers to recipientAddress.
    */
-  async createOnrampOrder(
-    params: OnrampOrderRequest,
+  async createLightningQuote(
+    params: LightningQuoteRequest,
     idempotencyKey: string,
-  ): Promise<OnrampOrderResponse> {
-    const url = `${this.apiBase}/v1/orchestration/onramp`;
-    let response: Response;
+  ): Promise<LightningQuoteResponse> {
+    const url = `${this.apiBase}/v1/orchestration/quote`
+    let response: Response
 
     try {
       response = await fetch(url, {
         method: 'POST',
+        signal: AbortSignal.timeout(15_000),
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.apiKey}`,
           'X-Idempotency-Key': idempotencyKey,
         },
         body: JSON.stringify(params),
-      });
+      })
     } catch (networkError) {
       this.logger.error(
         { event: 'flashnet.network_error', url, error: String(networkError) },
-        'Flashnet network error on createOnrampOrder',
-      );
-      throw new ServiceUnavailableException('Flashnet service unreachable');
+        'Flashnet network error on createLightningQuote',
+      )
+      throw new ServiceUnavailableException('Flashnet service unreachable')
     }
 
     if (!response.ok) {
-      const errorBody = await this.parseErrorBody(response);
+      const errorBody = await this.parseErrorBody(response)
       this.logger.warn(
         {
-          event: 'flashnet.onramp_error',
+          event: 'flashnet.quote_error',
           status: response.status,
           code: errorBody.code,
           message: errorBody.message,
         },
-        'Flashnet onramp returned non-2xx',
-      );
+        'Flashnet quote returned non-2xx',
+      )
       throw new BadGatewayException({
         code: errorBody.code,
         message: errorBody.message,
-      });
+      })
     }
 
-    const replayed = response.headers.get('x-idempotency-replayed') === 'true';
-    const body = (await response.json()) as Omit<OnrampOrderResponse, 'replayed'>;
-    return { ...body, replayed };
+    const replayed = response.headers.get('x-idempotency-replayed') === 'true'
+    const body = (await response.json()) as Omit<
+      LightningQuoteResponse,
+      'replayed'
+    >
+    await validateLightningQuote(body, params.amount)
+    return { ...body, replayed }
+  }
+
+  /** An unfunded quote legitimately has no order yet. Never fabricate an ID. */
+  async getQuoteOrder(quoteId: string): Promise<FlashnetWebhookData | null> {
+    const url = `${this.apiBase}/v1/orchestration/order?quoteId=${encodeURIComponent(quoteId)}`
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok)
+      throw new ServiceUnavailableException('Quote status unavailable')
+    const body = (await response.json()) as {
+      order?: FlashnetWebhookData | null
+    }
+    if (body.order === null) return null
+    if (
+      !body.order ||
+      typeof body.order.id !== 'string' ||
+      !body.order.id.startsWith('ord_') ||
+      body.order.quoteId !== quoteId ||
+      typeof body.order.status !== 'string' ||
+      typeof body.order.updatedAt !== 'string' ||
+      !Number.isFinite(Date.parse(body.order.updatedAt))
+    ) {
+      throw new BadGatewayException('Invalid quote status')
+    }
+    return body.order
   }
 
   /**
@@ -94,8 +128,8 @@ export class FlashnetService {
    * rename to quoteId in PR7 when the scheduler wires this up.
    */
   async getOrderStatus(quoteId: string): Promise<OrderStatusResponse> {
-    const url = `${this.apiBase}/v1/orchestration/order?quoteId=${encodeURIComponent(quoteId)}`;
-    let response: Response;
+    const url = `${this.apiBase}/v1/orchestration/order?quoteId=${encodeURIComponent(quoteId)}`
+    let response: Response
 
     try {
       response = await fetch(url, {
@@ -103,7 +137,7 @@ export class FlashnetService {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
         },
-      });
+      })
     } catch (networkError) {
       this.logger.error(
         {
@@ -113,12 +147,12 @@ export class FlashnetService {
           error: String(networkError),
         },
         'Flashnet network error on getOrderStatus',
-      );
-      throw new ServiceUnavailableException('Flashnet service unreachable');
+      )
+      throw new ServiceUnavailableException('Flashnet service unreachable')
     }
 
     if (!response.ok) {
-      const errorBody = await this.parseErrorBody(response);
+      const errorBody = await this.parseErrorBody(response)
       this.logger.warn(
         {
           event: 'flashnet.order_status_error',
@@ -127,14 +161,14 @@ export class FlashnetService {
           code: errorBody.code,
         },
         'Flashnet getOrderStatus returned non-2xx',
-      );
+      )
       throw new BadGatewayException({
         code: errorBody.code,
         message: errorBody.message,
-      });
+      })
     }
 
-    return response.json() as Promise<OrderStatusResponse>;
+    return response.json() as Promise<OrderStatusResponse>
   }
 
   /**
@@ -153,42 +187,42 @@ export class FlashnetService {
   ): boolean {
     try {
       const bodyStr =
-        rawBody instanceof Buffer ? rawBody.toString('utf8') : rawBody;
-      const payload = `${timestamp}.${bodyStr}`;
+        rawBody instanceof Buffer ? rawBody.toString('utf8') : rawBody
+      const payload = `${timestamp}.${bodyStr}`
       const expected = createHmac('sha256', this.webhookSecret)
         .update(payload)
-        .digest('hex');
+        .digest('hex')
 
-      const expectedBuf = Buffer.from(expected, 'utf8');
-      const receivedBuf = Buffer.from(signature, 'utf8');
+      const expectedBuf = Buffer.from(expected, 'utf8')
+      const receivedBuf = Buffer.from(signature, 'utf8')
 
       // timingSafeEqual throws if lengths differ — guard explicitly.
       if (expectedBuf.length !== receivedBuf.length) {
-        return false;
+        return false
       }
 
-      return timingSafeEqual(expectedBuf, receivedBuf);
+      return timingSafeEqual(expectedBuf, receivedBuf)
     } catch (err) {
       this.logger.error(
         { event: 'flashnet.hmac_error', error: String(err) },
         'Error in verifyWebhookSignature',
-      );
-      return false;
+      )
+      return false
     }
   }
 
   private async parseErrorBody(response: Response): Promise<FlashnetApiError> {
     try {
-      const json = (await response.json()) as Partial<FlashnetApiError>;
+      const json = (await response.json()) as Partial<FlashnetApiError>
       return {
         code: json.code ?? ('service_unavailable' as FlashnetApiError['code']),
         message: json.message ?? `HTTP ${response.status}`,
-      };
+      }
     } catch {
       return {
         code: 'service_unavailable',
         message: `HTTP ${response.status}`,
-      };
+      }
     }
   }
 }
