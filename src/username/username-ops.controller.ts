@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Post,
   UseGuards,
@@ -24,6 +25,18 @@ import { UsernameInfoResponseDto } from './dto/username-response.dto'
 @UseGuards(InternalOpsGuard)
 export class UsernameOpsController {
   constructor(private readonly usernameService: UsernameService) {}
+
+  /**
+   * Read before you act. A grant cannot be revoked — the DTO rejects negative
+   * amounts, and taking back an allowance the customer may already have spent
+   * has no coherent meaning — so an operator must be able to see the ceiling
+   * without spending one to discover it. Same shape the grant returns, so a
+   * screen renders one component for both.
+   */
+  @Get(':pubkey')
+  read(@Param('pubkey') pubkey: string): Promise<UsernameInfoResponseDto> {
+    return this.usernameService.getUsernameInfoByPubKey(pubkey)
+  }
 
   @Post(':pubkey/grant')
   @UsePipes(
