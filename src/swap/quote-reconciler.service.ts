@@ -17,6 +17,9 @@ export const SETTLEMENT_GRACE_MS = 6 * 60 * 60 * 1000
 
 const TERMINAL = ['DELIVERED', 'FAILED', 'EXPIRED', 'REFUNDED']
 
+const errorReason = (error: unknown): string =>
+  error instanceof Error ? error.message : 'unknown error'
+
 /** Durable quote lookup covers missed webhooks, restarts, and delayed funding. */
 @Injectable()
 export class QuoteReconciler implements OnModuleInit, OnModuleDestroy {
@@ -53,8 +56,10 @@ export class QuoteReconciler implements OnModuleInit, OnModuleDestroy {
     while (!this.stop.signal.aborted) {
       try {
         await this.reconcileBatch()
-      } catch {
-        this.logger.warn('Quote reconciliation unavailable')
+      } catch (error) {
+        this.logger.warn(
+          `Quote reconciliation unavailable: ${errorReason(error)}`,
+        )
       }
       try {
         await delay(30_000, undefined, { signal: this.stop.signal })
@@ -134,8 +139,13 @@ export class QuoteReconciler implements OnModuleInit, OnModuleDestroy {
                 data: snapshot,
               })
             }
-          } catch {
-            this.logger.warn('Quote reconciliation deferred')
+          } catch (error) {
+            // Identify the payment so a stuck order can be traced. The errors that
+            // reach here are short provider/validation/DB messages; none carries
+            // an invoice, API key or request header.
+            this.logger.warn(
+              `[${row.quoteId}] quote reconciliation deferred (order=${row.orderId ?? 'none'}): ${errorReason(error)}`,
+            )
           }
         }
       }
