@@ -128,4 +128,21 @@ describe('Quote reconciliation', () => {
     await service.reconcileBatch()
     expect(swaps.applyWebhookEvent).not.toHaveBeenCalled()
   })
+
+  it('logs which payment was deferred and why', async () => {
+    const { service, prisma, flashnet } = setup()
+    const warn = jest
+      .spyOn((service as any).logger, 'warn')
+      .mockImplementation(() => undefined)
+    prisma.flashnetOrder.findMany.mockResolvedValueOnce([
+      { id: 'row', quoteId: 'q_pending', orderId: 'ord_paid' },
+    ])
+    flashnet.getQuoteOrder.mockRejectedValue(
+      new Error('Quote status unavailable'),
+    )
+    await service.reconcileBatch()
+    expect(warn).toHaveBeenCalledWith(
+      '[q_pending] quote reconciliation deferred (order=ord_paid): Quote status unavailable',
+    )
+  })
 })
