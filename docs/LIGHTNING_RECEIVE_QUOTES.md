@@ -37,6 +37,11 @@ and direct in-app Spark invoice flows are not changed.
 2. Validate returned source amount, mainnet BOLT11 amount, checksum, required
    fields, ECDSA signature, quote expiry and invoice expiry before returning it.
    The persisted expiry is the earlier of the quote and signed invoice expiry.
+   The request sends `descriptionHash` (sha256 of the LNURL-pay `metadata`),
+   and the invoice must carry exactly that BOLT11 `h`; one with a `d` memo or a
+   different hash is refused and the payment goes to the sats fallback, which
+   carries the same `h`. Strict LUD-06 wallets such as Strike reject an invoice
+   without it (issue 28).
 3. Persist the invoice, quote ID and receive-request ID atomically. The order ID
    is null until funding; no fabricated order ID or client submission call.
 4. Authenticate webhooks with existing HMAC handling. Bind a new order by its
