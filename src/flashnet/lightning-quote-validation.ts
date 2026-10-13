@@ -4,10 +4,15 @@ import { loadSecp256k1 } from '../auth/secp256k1.utils'
 import { bech32 } from 'bech32'
 import { LightningQuoteResponse } from './flashnet.types'
 
-/** Validate the amount and lifetime before handing an upstream invoice to a payer. */
+/**
+ * Validate the amount and lifetime before handing an upstream invoice to a
+ * payer. With `descriptionHash`, the invoice must also carry exactly that
+ * BOLT11 `h`: an invoice without it is refused by strict LUD-06 wallets.
+ */
 export async function validateLightningQuote(
   quote: Omit<LightningQuoteResponse, 'replayed'>,
   sats: string,
+  descriptionHash?: string,
 ): Promise<void> {
   try {
     if (
@@ -81,6 +86,13 @@ export async function validateLightningQuote(
       tags.get(16)?.length !== 52 ||
       tags.has(13) === tags.has(23) ||
       (tags.has(23) && tags.get(23).length !== 52)
+    )
+      throw new Error()
+    if (
+      descriptionHash !== undefined &&
+      (!tags.has(23) ||
+        Buffer.from(bech32.fromWords(tags.get(23))).toString('hex') !==
+          descriptionHash.toLowerCase())
     )
       throw new Error()
     const signature = Uint8Array.from(bech32.fromWords(words.slice(end)))

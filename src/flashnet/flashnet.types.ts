@@ -14,6 +14,11 @@ export interface LightningQuoteRequest {
   amount: string
   amountMode: 'exact_in'
   slippageBps: number
+  /**
+   * 64 hex chars: sha256 of the LNURL-pay metadata. Orchestra puts it in the
+   * invoice as BOLT11 `h` (and then omits the `d` memo).
+   */
+  descriptionHash?: string
 }
 
 export interface LightningQuoteResponse {

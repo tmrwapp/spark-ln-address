@@ -21,6 +21,8 @@ export interface InitiateLightningQuoteParams {
   recipientSparkAddress: string
   /** Lightning name id (usernameId FK on Invoice). */
   lightningNameId: string
+  /** Hex sha256 of the LNURL-pay metadata; becomes the invoice's BOLT11 `h`. */
+  descriptionHash: string
 }
 
 export const SLIPPAGE_BPS_DEFAULT = 50
@@ -63,6 +65,7 @@ export class SwapService {
       amountMsat,
       recipientSparkAddress,
       lightningNameId,
+      descriptionHash,
     } = params
 
     // LNURL does not identify the payer wallet. All general Lightning-address
@@ -78,6 +81,7 @@ export class SwapService {
         amount: amountSats.toString(),
         amountMode: 'exact_in',
         slippageBps: SLIPPAGE_BPS_DEFAULT,
+        descriptionHash,
       },
       idempotencyKey,
     )

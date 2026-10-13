@@ -85,7 +85,7 @@ export class FlashnetService {
       LightningQuoteResponse,
       'replayed'
     >
-    await validateLightningQuote(body, params.amount)
+    await validateLightningQuote(body, params.amount, params.descriptionHash)
     return { ...body, replayed }
   }
 

@@ -10,6 +10,7 @@ import { LnurlService } from './lnurl.service'
 import { LightsparkService } from '../lightspark/lightspark.service'
 import { SwapService } from '../swap/swap.service'
 import * as sparkAddressUtils from '../common/spark-address.utils'
+import { createHash } from 'node:crypto'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -250,6 +251,53 @@ describe('LnurlController', () => {
   // -------------------------------------------------------------------------
   // handleLnurlCallback — routing branches
   // -------------------------------------------------------------------------
+
+  describe('handleLnurlCallback — description hash (LUD-06 h tag)', () => {
+    // The hash a strict wallet such as Strike checks: sha256 of the metadata
+    // string the endpoint served it, for the same username.
+    async function servedMetadataHash(username: string): Promise<string> {
+      const { metadata } = await controller.getLnurlPayMetadata(username)
+      return createHash('sha256').update(metadata, 'utf8').digest('hex')
+    }
+
+    it('USDB path sends descriptionHash = sha256(served metadata)', async () => {
+      await controller.handleLnurlCallback('alice', '5000')
+
+      expect(swapService.initiateLightningQuote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          descriptionHash: await servedMetadataHash('alice'),
+        }),
+      )
+    })
+
+    it('sats path passes the same hash to the invoice, and never the comment', async () => {
+      lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(
+        MOCK_LIGHTNING_NAME_SATS,
+      )
+
+      await controller.handleLnurlCallback('alice', '2000', 'thanks!')
+
+      expect(lightsparkService.createInvoice).toHaveBeenCalledWith(
+        MOCK_LIGHTNING_NAME_SATS.linkingPubKeyHex,
+        2000,
+        await servedMetadataHash('alice'),
+      )
+    })
+
+    it('the sats fallback after a USDB failure carries the hash too', async () => {
+      swapService.initiateLightningQuote.mockRejectedValueOnce(
+        new Error('below minimum'),
+      )
+
+      await controller.handleLnurlCallback('alice', '5000')
+
+      expect(lightsparkService.createInvoice).toHaveBeenCalledWith(
+        MOCK_LIGHTNING_NAME_USDB.linkingPubKeyHex,
+        5000,
+        await servedMetadataHash('alice'),
+      )
+    })
+  })
 
   describe('handleLnurlCallback — routing', () => {
     it('USDB_ENABLED=true + USDB preference → calls SwapService.initiateLightningQuote with idempotencyKey, no prior DB write, returns bolt11', async () => {

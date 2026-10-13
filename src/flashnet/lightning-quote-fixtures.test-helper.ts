@@ -6,6 +6,7 @@ import { LightningQuoteResponse } from './flashnet.types'
 export function testInvoice(
   prefix = 'lnbc10u',
   timestamp = Math.floor(Date.now() / 1000),
+  descriptionHash?: string,
 ): string {
   const ec = createECDH('secp256k1')
   ec.generateKeys()
@@ -24,12 +25,17 @@ export function testInvoice(
     { length: 7 },
     (_, index) => Math.floor(timestamp / 32 ** (6 - index)) % 32,
   )
+  // A d memo by default; an h description hash (tag 23) when one is given.
+  const description: [number, Buffer] =
+    descriptionHash === undefined
+      ? [13, Buffer.from('Offline test')]
+      : [23, Buffer.from(descriptionHash, 'hex')]
   for (const [tag, bytes] of [
     [1, randomBytes(32)],
     [16, randomBytes(32)],
-    [13, Buffer.from('Offline test')],
+    description,
     [19, ec.getPublicKey(undefined, 'compressed')],
-  ] as const) {
+  ] as [number, Buffer][]) {
     const values = bech32.toWords(bytes)
     words.push(
       tag,

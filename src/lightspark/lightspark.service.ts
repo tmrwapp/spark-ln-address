@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { SparkWallet } from "@buildonspark/spark-sdk";
+import { SparkWallet } from '@buildonspark/spark-sdk'
 
 export interface InvoiceResult {
   bolt11: string
@@ -8,18 +8,27 @@ export interface InvoiceResult {
 
 @Injectable()
 export class LightsparkService {
-  private sparkWallet?: SparkWallet;
+  private sparkWallet?: SparkWallet
   constructor() {
     SparkWallet.initialize({
       options: {
         network: 'MAINNET',
-      }
+      },
     }).then(({ wallet }) => {
       this.sparkWallet = wallet as SparkWallet
     })
   }
 
-  async createInvoice(sparkPubKeyHex: string, amountMsat: number, memo: string): Promise<InvoiceResult> {
+  /**
+   * `descriptionHash` becomes the invoice's BOLT11 `h` tag (hex sha256 of the
+   * LNURL-pay metadata). The SDK refuses a memo alongside it, so the invoice
+   * carries no text description.
+   */
+  async createInvoice(
+    sparkPubKeyHex: string,
+    amountMsat: number,
+    descriptionHash: string,
+  ): Promise<InvoiceResult> {
     if (!this.sparkWallet) {
       throw new Error('Spark wallet not initialized')
     }
@@ -34,7 +43,7 @@ export class LightsparkService {
     const { invoice } = await this.sparkWallet.createLightningInvoice({
       receiverIdentityPubkey: sparkPubKeyHex,
       amountSats,
-      memo,
+      descriptionHash,
     })
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
 
@@ -44,6 +53,3 @@ export class LightsparkService {
     }
   }
 }
-
-
-

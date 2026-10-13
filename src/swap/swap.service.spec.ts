@@ -76,6 +76,7 @@ const BASE_PARAMS = {
   amountMsat: 1_000_000,
   recipientSparkAddress: 'spark1qtest',
   lightningNameId: 'ln-1',
+  descriptionHash: 'ab'.repeat(32),
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,7 @@ describe('SwapService', () => {
           slippageBps: 50,
           sourceChain: 'lightning',
           sourceAsset: 'BTC',
+          descriptionHash: BASE_PARAMS.descriptionHash,
         }),
         BASE_PARAMS.idempotencyKey,
       )
