@@ -21,10 +21,12 @@ describe('Lightning quote validation', () => {
       ).resolves.toBeUndefined()
     })
 
-    it('rejects an invoice with a d memo and no h when a hash is expected', async () => {
+    it('rejects an invoice with a d memo and no h when a hash is expected, with its own code', async () => {
       await expect(
         validateLightningQuote(testQuote(), '1000', HASH),
-      ).rejects.toThrow()
+      ).rejects.toMatchObject({
+        response: { code: 'description_hash_mismatch' },
+      })
     })
 
     it('rejects an invoice whose h differs from the expected hash', async () => {

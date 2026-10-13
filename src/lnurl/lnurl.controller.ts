@@ -85,14 +85,11 @@ export class LnurlController {
   @Get('lnurl/callback/:username')
   async handleLnurlCallback(
     @Param('username') rawUsername: string,
+    // A LUD-12 `comment` query parameter is accepted but not read: the invoice
+    // carries a description hash of the metadata (below), so it has no text
+    // description to append the comment to, and the hash does not cover it.
     @Query('amount') amountStr: string,
-    @Query('comment') comment?: string,
   ): Promise<LnurlCallbackResponseDto | { status: 'ERROR'; reason: string }> {
-    // LUD-12 `comment` is accepted but goes nowhere: the invoice carries a
-    // description hash of the metadata (below), so it has no text description
-    // to append the comment to, and the comment is not part of that hash.
-    void comment
-
     // Validate amount parameter
     if (!amountStr) {
       throw new BadRequestException('Missing amount parameter')

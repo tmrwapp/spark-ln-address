@@ -4,6 +4,9 @@ import { loadSecp256k1 } from '../auth/secp256k1.utils'
 import { bech32 } from 'bech32'
 import { LightningQuoteResponse } from './flashnet.types'
 
+/** The invoice is otherwise valid but lacks the requested BOLT11 `h`. */
+class DescriptionHashMismatch extends Error {}
+
 /**
  * Validate the amount and lifetime before handing an upstream invoice to a
  * payer. With `descriptionHash`, the invoice must also carry exactly that
@@ -94,7 +97,7 @@ export async function validateLightningQuote(
         Buffer.from(bech32.fromWords(tags.get(23))).toString('hex') !==
           descriptionHash.toLowerCase())
     )
-      throw new Error()
+      throw new DescriptionHashMismatch()
     const signature = Uint8Array.from(bech32.fromWords(words.slice(end)))
     if (signature.length !== 65 || signature[64] > 3) throw new Error()
     // Signing data pads the unsigned 5-bit words to a full byte.
@@ -151,7 +154,14 @@ export async function validateLightningQuote(
       throw new Error()
     // Never persist a lifetime beyond the signed invoice's own expiry.
     quote.expiresAt = new Date(Math.min(expiry, invoiceExpiry)).toISOString()
-  } catch {
+  } catch (err) {
+    // A distinct code, so the USDB-to-sats fallback warning says why: this one
+    // means Orchestra is not honouring `descriptionHash`.
+    if (err instanceof DescriptionHashMismatch)
+      throw new BadGatewayException({
+        code: 'description_hash_mismatch',
+        message: 'Lightning quote invoice lacks the expected description hash',
+      })
     throw new BadGatewayException('Invalid Lightning quote')
   }
 }

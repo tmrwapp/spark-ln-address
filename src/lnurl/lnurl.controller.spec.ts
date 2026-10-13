@@ -270,12 +270,12 @@ describe('LnurlController', () => {
       )
     })
 
-    it('sats path passes the same hash to the invoice, and never the comment', async () => {
+    it('sats path passes the same hash to the invoice', async () => {
       lnurlService.findActiveLightningNameWithUser.mockResolvedValueOnce(
         MOCK_LIGHTNING_NAME_SATS,
       )
 
-      await controller.handleLnurlCallback('alice', '2000', 'thanks!')
+      await controller.handleLnurlCallback('alice', '2000')
 
       expect(lightsparkService.createInvoice).toHaveBeenCalledWith(
         MOCK_LIGHTNING_NAME_SATS.linkingPubKeyHex,

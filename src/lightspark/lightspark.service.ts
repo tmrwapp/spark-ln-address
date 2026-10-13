@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { SparkWallet } from '@buildonspark/spark-sdk'
+import { bolt11DescriptionHash } from '../common/bolt11-description-hash'
 
 export interface InvoiceResult {
   bolt11: string
@@ -8,6 +9,7 @@ export interface InvoiceResult {
 
 @Injectable()
 export class LightsparkService {
+  private readonly logger = new Logger(LightsparkService.name)
   private sparkWallet?: SparkWallet
   constructor() {
     SparkWallet.initialize({
@@ -23,6 +25,11 @@ export class LightsparkService {
    * `descriptionHash` becomes the invoice's BOLT11 `h` tag (hex sha256 of the
    * LNURL-pay metadata). The SDK refuses a memo alongside it, so the invoice
    * carries no text description.
+   *
+   * The SDK does not check that the SSP honoured the hash. A missing or wrong
+   * `h` is logged as an error but the invoice is still returned: strict
+   * wallets (Strike) refuse it either way, while every other wallet can
+   * still pay it, which a refusal here would take away.
    */
   async createInvoice(
     sparkPubKeyHex: string,
@@ -45,6 +52,12 @@ export class LightsparkService {
       amountSats,
       descriptionHash,
     })
+    if (bolt11DescriptionHash(invoice.encodedInvoice) !== descriptionHash) {
+      this.logger.error({
+        event: 'lightspark.description_hash_mismatch',
+        message: 'Spark invoice lacks the requested description hash',
+      })
+    }
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
 
     return {
