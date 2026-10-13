@@ -52,10 +52,16 @@ export class LightsparkService {
       amountSats,
       descriptionHash,
     })
-    if (bolt11DescriptionHash(invoice.encodedInvoice) !== descriptionHash) {
+    const foundHash = bolt11DescriptionHash(invoice.encodedInvoice)
+    if (foundHash !== descriptionHash) {
+      // Payment hash and both description hashes tie this to a failed
+      // payment; none of them identifies the customer.
       this.logger.error({
         event: 'lightspark.description_hash_mismatch',
         message: 'Spark invoice lacks the requested description hash',
+        paymentHash: invoice.paymentHash,
+        expectedDescriptionHash: descriptionHash,
+        foundDescriptionHash: foundHash,
       })
     }
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours

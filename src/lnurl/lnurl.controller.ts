@@ -78,16 +78,16 @@ export class LnurlController {
       minSendable: LNURL_CONSTANTS.MIN_SENDABLE_MSAT,
       maxSendable: LNURL_CONSTANTS.MAX_SENDABLE_MSAT,
       metadata,
-      commentAllowed: LNURL_CONSTANTS.COMMENT_ALLOWED,
+      // No `commentAllowed`: LUD-12 comments are not supported. The invoice
+      // carries a description hash of `metadata`, so it has no text
+      // description a comment could go into, and the hash does not cover one.
     }
   }
 
   @Get('lnurl/callback/:username')
   async handleLnurlCallback(
     @Param('username') rawUsername: string,
-    // A LUD-12 `comment` query parameter is accepted but not read: the invoice
-    // carries a description hash of the metadata (below), so it has no text
-    // description to append the comment to, and the hash does not cover it.
+    // A `comment` query parameter (LUD-12) is ignored: none is advertised.
     @Query('amount') amountStr: string,
   ): Promise<LnurlCallbackResponseDto | { status: 'ERROR'; reason: string }> {
     // Validate amount parameter
@@ -121,7 +121,17 @@ export class LnurlController {
 
     // Both invoice paths carry this as BOLT11 `h`. Strike (and any wallet
     // still on the strict LUD-06 check) rejects an invoice without it.
-    const descriptionHash = this.descriptionHashFor(lightningName.username)
+    // A misconfiguration here still answers in the LUD-06 error shape.
+    let descriptionHash: string
+    try {
+      descriptionHash = this.descriptionHashFor(lightningName.username)
+    } catch (err: any) {
+      const reason = extractErrorReason(err)
+      this.logger.error(
+        `[${lightningName.username}] description hash unavailable: ${reason}`,
+      )
+      return { status: 'ERROR', reason }
+    }
 
     // Kill switch + per-user preference gate.
     const usdbEnabled = this.configService.get<string>('USDB_ENABLED')
@@ -173,9 +183,11 @@ export class LnurlController {
 
   /** sha256 of the metadata string the endpoint above serves for `username`. */
   private descriptionHashFor(username: string): string {
-    const domain = getDomainFromBaseUrl(
-      this.configService.get<string>('PUBLIC_BASE_URL')!,
-    )
+    const publicBaseUrl = this.configService.get<string>('PUBLIC_BASE_URL')
+    if (!publicBaseUrl) {
+      throw new Error('PUBLIC_BASE_URL not configured')
+    }
+    const domain = getDomainFromBaseUrl(publicBaseUrl)
     return lnurlPayDescriptionHash(buildLnurlPayMetadata(username, domain))
   }
 

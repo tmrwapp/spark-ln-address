@@ -187,6 +187,12 @@ describe('LnurlController', () => {
       expect(identifier[1]).toBe('alice@pay.example.com')
     })
 
+    it('does not advertise LUD-12 comments, since the invoice cannot carry one', async () => {
+      const result = await controller.getLnurlPayMetadata('alice')
+
+      expect(result).not.toHaveProperty('commentAllowed')
+    })
+
     it('throws NotFoundException for unknown username', async () => {
       lnurlService.findActiveLightningName.mockResolvedValueOnce(null)
 
@@ -282,6 +288,21 @@ describe('LnurlController', () => {
         2000,
         await servedMetadataHash('alice'),
       )
+    })
+
+    it('answers a missing PUBLIC_BASE_URL in the LUD-06 error shape, issuing nothing', async () => {
+      ;(configService.get as jest.Mock).mockImplementation((key: string) =>
+        key === 'USDB_ENABLED' ? 'true' : undefined,
+      )
+
+      const result = await controller.handleLnurlCallback('alice', '5000')
+
+      expect(result).toEqual({
+        status: 'ERROR',
+        reason: 'PUBLIC_BASE_URL not configured',
+      })
+      expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
+      expect(lightsparkService.createInvoice).not.toHaveBeenCalled()
     })
 
     it('the sats fallback after a USDB failure carries the hash too', async () => {

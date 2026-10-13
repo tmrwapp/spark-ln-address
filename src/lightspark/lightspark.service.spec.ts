@@ -53,7 +53,7 @@ describe('LightsparkService.createInvoice', () => {
     async (_label, makeInvoice) => {
       const bolt11 = makeInvoice()
       createLightningInvoice.mockResolvedValue({
-        invoice: { encodedInvoice: bolt11 },
+        invoice: { encodedInvoice: bolt11, paymentHash: 'ph-1' },
       })
 
       const result = await service.createInvoice(PUBKEY, 1_000_000, HASH)
@@ -62,6 +62,10 @@ describe('LightsparkService.createInvoice', () => {
       expect(errorSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           event: 'lightspark.description_hash_mismatch',
+          paymentHash: 'ph-1',
+          expectedDescriptionHash: HASH,
+          foundDescriptionHash:
+            _label === 'a different h' ? 'cd'.repeat(32) : null,
         }),
       )
     },
