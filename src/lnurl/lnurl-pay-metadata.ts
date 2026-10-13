@@ -20,7 +20,10 @@ export function buildLnurlPayMetadata(
   ])
 }
 
-/** Lowercase hex SHA-256 of the exact UTF-8 bytes of `metadata`. */
+/**
+ * Lowercase hex SHA-256 of the exact UTF-8 bytes of `metadata`. If LUD-18
+ * `payerData` is ever supported, the hash must cover metadata + payer data.
+ */
 export function lnurlPayDescriptionHash(metadata: string): string {
   return createHash('sha256').update(metadata, 'utf8').digest('hex')
 }
