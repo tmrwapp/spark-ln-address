@@ -290,17 +290,14 @@ describe('LnurlController', () => {
       )
     })
 
-    it('answers a missing PUBLIC_BASE_URL in the LUD-06 error shape, issuing nothing', async () => {
+    it('answers a missing PUBLIC_BASE_URL in the LUD-06 error shape, without naming it, issuing nothing', async () => {
       ;(configService.get as jest.Mock).mockImplementation((key: string) =>
         key === 'USDB_ENABLED' ? 'true' : undefined,
       )
 
       const result = await controller.handleLnurlCallback('alice', '5000')
 
-      expect(result).toEqual({
-        status: 'ERROR',
-        reason: 'PUBLIC_BASE_URL not configured',
-      })
+      expect(result).toEqual({ status: 'ERROR', reason: 'Service unavailable' })
       expect(swapService.initiateLightningQuote).not.toHaveBeenCalled()
       expect(lightsparkService.createInvoice).not.toHaveBeenCalled()
     })

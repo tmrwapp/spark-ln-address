@@ -126,11 +126,11 @@ export class LnurlController {
     try {
       descriptionHash = this.descriptionHashFor(lightningName.username)
     } catch (err: any) {
-      const reason = extractErrorReason(err)
+      // The detail names server configuration: log it, keep it off the wire.
       this.logger.error(
-        `[${lightningName.username}] description hash unavailable: ${reason}`,
+        `[${lightningName.username}] description hash unavailable: ${extractErrorReason(err)}`,
       )
-      return { status: 'ERROR', reason }
+      return { status: 'ERROR', reason: 'Service unavailable' }
     }
 
     // Kill switch + per-user preference gate.

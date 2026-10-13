@@ -12,6 +12,11 @@ describe('readBolt11Tags', () => {
     expect(end).toBe(words.length - 104)
   })
 
+  it('throws on a tag header cut off by the signature', () => {
+    const words = [...TIMESTAMP, 23, 0, ...SIGNATURE]
+    expect(() => readBolt11Tags(words)).toThrow('truncated BOLT11 tag')
+  })
+
   it('throws on a tag that runs into the signature', () => {
     const words = [...TIMESTAMP, 23, 1, 20, 1, 2, 3, ...SIGNATURE]
     expect(() => readBolt11Tags(words)).toThrow('BOLT11 tag overruns')
