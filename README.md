@@ -33,7 +33,7 @@ Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay 
 - `GET /.well-known/lnurlp/:username`
   - Validates username exists/active.
   - Returns `tag: "payRequest"`, `callback`, `minSendable`, `maxSendable`, `metadata` (`text/plain` and `text/identifier` with `username@domain`, built by `src/lnurl/lnurl-pay-metadata.ts`). No `commentAllowed`: LUD-12 comments are not supported.
-- `GET /lnurl/callback/:username?amount=<msat>&comment=<text>`
+- `GET /lnurl/callback/:username?amount=<msat>`
   - Validates amount within configured min/max.
   - Creates the invoice (an Orchestra USDB quote, or a Spark sats invoice) and returns `{ pr, routes: [] }`.
   - Every invoice carries a description hash (BOLT11 `h`) equal to `sha256(metadata)`, and no text memo. Strict LUD-06 wallets such as Strike refuse an invoice without it. A `comment` parameter is ignored, since none is advertised.

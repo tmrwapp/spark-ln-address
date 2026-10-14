@@ -29,13 +29,15 @@ describe('Lightning quote validation', () => {
       })
     })
 
-    it('rejects an invoice whose h differs from the expected hash', async () => {
+    it('rejects an invoice whose h differs from the expected hash, with its own code', async () => {
       const quote = withInvoice(
         testInvoice('lnbc10u', undefined, 'cd'.repeat(32)),
       )
       await expect(
         validateLightningQuote(quote, '1000', HASH),
-      ).rejects.toThrow()
+      ).rejects.toMatchObject({
+        response: { code: 'description_hash_mismatch' },
+      })
     })
   })
 
