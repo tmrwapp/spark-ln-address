@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import {
   buildLnurlPayMetadata,
   lnurlPayDescriptionHash,
@@ -14,9 +13,11 @@ describe('LNURL-pay metadata', () => {
   it('hashes the exact UTF-8 bytes as lowercase hex', () => {
     const metadata = buildLnurlPayMetadata('alice', 'guap.to')
     const hash = lnurlPayDescriptionHash(metadata)
-    expect(hash).toMatch(/^[0-9a-f]{64}$/)
+
+    // Known-answer vector independently verified with OpenSSL
+    // (`openssl dgst -sha256` over the exact 68 metadata bytes).
     expect(hash).toBe(
-      createHash('sha256').update(Buffer.from(metadata, 'utf8')).digest('hex'),
+      '27862b5ce035d34cd12395e3a66c6c2530df8a24f601cd2baac7850e723a9ccc',
     )
   })
 })
