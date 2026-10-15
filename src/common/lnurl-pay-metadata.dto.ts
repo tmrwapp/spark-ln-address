@@ -5,5 +5,5 @@ export class LnurlPayMetadataDto {
   minSendable: number // msats
   maxSendable: number // msats
   metadata: string // JSON-encoded metadata array (LUD-06: raw string for sha256 binding)
-  commentAllowed?: number // max comment length
+  // No commentAllowed: LUD-12 comments are not supported (see the controller).
 }

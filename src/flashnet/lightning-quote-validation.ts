@@ -3,11 +3,20 @@ import { createHash, createPublicKey, verify } from 'node:crypto'
 import { loadSecp256k1 } from '../auth/secp256k1.utils'
 import { bech32 } from 'bech32'
 import { LightningQuoteResponse } from './flashnet.types'
+import { BOLT11_TIMESTAMP_WORDS, readBolt11Tags } from '../common/bolt11-tags'
 
-/** Validate the amount and lifetime before handing an upstream invoice to a payer. */
+/** The invoice is otherwise valid but lacks the requested BOLT11 `h`. */
+class DescriptionHashMismatch extends Error {}
+
+/**
+ * Validate the amount and lifetime before handing an upstream invoice to a
+ * payer. With `descriptionHash`, the invoice must also carry exactly that
+ * BOLT11 `h`: an invoice without it is refused by strict LUD-06 wallets.
+ */
 export async function validateLightningQuote(
   quote: Omit<LightningQuoteResponse, 'replayed'>,
   sats: string,
+  descriptionHash?: string,
 ): Promise<void> {
   try {
     if (
@@ -59,22 +68,9 @@ export async function validateLightningQuote(
     if (msat !== BigInt(sats) * 1000n) throw new Error()
     const number = (values: number[]) =>
       values.reduce((total, word) => total * 32 + word, 0)
-    const timestamp = number(words.slice(0, 7))
-    let lifetime = 3600
-    const tags = new Map<number, number[]>()
-    const end = words.length - 104 // Recoverable signature, 65 bytes.
-    for (let offset = 7; offset < end; ) {
-      if (offset + 3 > end) throw new Error()
-      const tag = words[offset]
-      const length = words[offset + 1] * 32 + words[offset + 2]
-      if (offset + 3 + length > end) throw new Error()
-      if (tags.has(tag) && [1, 6, 13, 16, 19, 23].includes(tag))
-        throw new Error()
-      tags.set(tag, words.slice(offset + 3, offset + 3 + length))
-      if (tag === 6)
-        lifetime = number(words.slice(offset + 3, offset + 3 + length)) // x: expiry
-      offset += 3 + length
-    }
+    const timestamp = number(words.slice(0, BOLT11_TIMESTAMP_WORDS))
+    const { tags, end } = readBolt11Tags(words)
+    const lifetime = tags.has(6) ? number(tags.get(6)) : 3600 // x: expiry
     // BOLT11 requires a payment hash, secret and exactly one description form.
     if (
       tags.get(1)?.length !== 52 ||
@@ -83,6 +79,13 @@ export async function validateLightningQuote(
       (tags.has(23) && tags.get(23).length !== 52)
     )
       throw new Error()
+    if (
+      descriptionHash !== undefined &&
+      (!tags.has(23) ||
+        Buffer.from(bech32.fromWords(tags.get(23))).toString('hex') !==
+          descriptionHash.toLowerCase())
+    )
+      throw new DescriptionHashMismatch()
     const signature = Uint8Array.from(bech32.fromWords(words.slice(end)))
     if (signature.length !== 65 || signature[64] > 3) throw new Error()
     // Signing data pads the unsigned 5-bit words to a full byte.
@@ -139,7 +142,14 @@ export async function validateLightningQuote(
       throw new Error()
     // Never persist a lifetime beyond the signed invoice's own expiry.
     quote.expiresAt = new Date(Math.min(expiry, invoiceExpiry)).toISOString()
-  } catch {
+  } catch (err) {
+    // A distinct code, so the USDB-to-sats fallback warning says why: this one
+    // means Orchestra is not honouring `descriptionHash`.
+    if (err instanceof DescriptionHashMismatch)
+      throw new BadGatewayException({
+        code: 'description_hash_mismatch',
+        message: 'Lightning quote invoice lacks the expected description hash',
+      })
     throw new BadGatewayException('Invalid Lightning quote')
   }
 }

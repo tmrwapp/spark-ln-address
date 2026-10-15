@@ -2,7 +2,45 @@ import { bech32 } from 'bech32'
 import { validateLightningQuote } from './lightning-quote-validation'
 import { testInvoice, testQuote } from './lightning-quote-fixtures.test-helper'
 
+const HASH = 'ab'.repeat(32)
+
 describe('Lightning quote validation', () => {
+  describe('description hash', () => {
+    const withInvoice = (depositAddress: string) => ({
+      ...testQuote(),
+      depositAddress,
+    })
+
+    it('accepts an invoice whose h equals the expected hash, in either case', async () => {
+      const quote = withInvoice(testInvoice('lnbc10u', undefined, HASH))
+      await expect(
+        validateLightningQuote({ ...quote }, '1000', HASH),
+      ).resolves.toBeUndefined()
+      await expect(
+        validateLightningQuote({ ...quote }, '1000', HASH.toUpperCase()),
+      ).resolves.toBeUndefined()
+    })
+
+    it('rejects an invoice with a d memo and no h when a hash is expected, with its own code', async () => {
+      await expect(
+        validateLightningQuote(testQuote(), '1000', HASH),
+      ).rejects.toMatchObject({
+        response: { code: 'description_hash_mismatch' },
+      })
+    })
+
+    it('rejects an invoice whose h differs from the expected hash, with its own code', async () => {
+      const quote = withInvoice(
+        testInvoice('lnbc10u', undefined, 'cd'.repeat(32)),
+      )
+      await expect(
+        validateLightningQuote(quote, '1000', HASH),
+      ).rejects.toMatchObject({
+        response: { code: 'description_hash_mismatch' },
+      })
+    })
+  })
+
   it('accepts an exact-in quote without an order or optional price lock', async () => {
     await expect(
       validateLightningQuote(testQuote(), '1000'),

@@ -32,10 +32,11 @@ Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay 
 ### LNURL-Pay (LUD-16)
 - `GET /.well-known/lnurlp/:username`
   - Validates username exists/active.
-  - Returns `tag: "payRequest"`, `callback`, `minSendable`, `maxSendable`, `metadata` (`text/plain` with `username@domain`), `commentAllowed`.
-- `GET /lnurl/callback/:username?amount=<msat>&comment=<text>`
+  - Returns `tag: "payRequest"`, `callback`, `minSendable`, `maxSendable`, `metadata` (`text/plain` and `text/identifier` with `username@domain`, built by `src/lnurl/lnurl-pay-metadata.ts`). No `commentAllowed`: LUD-12 comments are not supported.
+- `GET /lnurl/callback/:username?amount=<msat>`
   - Validates amount within configured min/max.
-  - Creates invoice via Lightspark and returns `{ pr, routes: [] }`.
+  - Creates the invoice (an Orchestra USDB quote, or a Spark sats invoice) and returns `{ pr, routes: [] }`.
+  - Every invoice carries a description hash (BOLT11 `h`) equal to `sha256(metadata)`, and no text memo. Strict LUD-06 wallets such as Strike refuse an invoice without it. A `comment` parameter is ignored, since none is advertised.
 
 ### LNURL-Auth (LUD-04)
 - `GET /v1/auth/lnurl`
@@ -77,5 +78,5 @@ E2E tests use a separate MySQL container (`mysql-test` profile) and database `sp
 
 ## Notes
 - Lightning Addresses resolve to `username@<PUBLIC_BASE_URL domain>`.
-- Min/max sendable amounts and comment allowance are fixed in `src/common/constants.ts`.
+- Min/max sendable amounts are fixed in `src/common/constants.ts`.
 - Spark SDK must be able to initialize at startup; ensure credentials are valid.

@@ -19,6 +19,10 @@ import { getDomainFromBaseUrl } from '../common/utils'
 import type { SparkNetwork } from '../common/spark-address.utils'
 import { encodeSparkAddress } from '../common/spark-address.utils'
 import { SwapService } from '../swap/swap.service'
+import {
+  buildLnurlPayMetadata,
+  lnurlPayDescriptionHash,
+} from './lnurl-pay-metadata'
 
 /**
  * Extracts a short reason string from an unknown error for log/response use.
@@ -65,11 +69,7 @@ export class LnurlController {
 
     const domain = getDomainFromBaseUrl(publicBaseUrl)
     const callback = `${publicBaseUrl}/lnurl/callback/${lightningName.username}`
-    const identifier = `${lightningName.username}@${domain}`
-    const metadata = JSON.stringify([
-      ['text/plain', identifier],
-      ['text/identifier', identifier],
-    ])
+    const metadata = buildLnurlPayMetadata(lightningName.username, domain)
 
     return {
       status: 'OK',
@@ -78,15 +78,17 @@ export class LnurlController {
       minSendable: LNURL_CONSTANTS.MIN_SENDABLE_MSAT,
       maxSendable: LNURL_CONSTANTS.MAX_SENDABLE_MSAT,
       metadata,
-      commentAllowed: LNURL_CONSTANTS.COMMENT_ALLOWED,
+      // No `commentAllowed`: LUD-12 comments are not supported. The invoice
+      // carries a description hash of `metadata`, so it has no text
+      // description a comment could go into, and the hash does not cover one.
     }
   }
 
   @Get('lnurl/callback/:username')
   async handleLnurlCallback(
     @Param('username') rawUsername: string,
+    // A `comment` query parameter (LUD-12) is ignored: none is advertised.
     @Query('amount') amountStr: string,
-    @Query('comment') comment?: string,
   ): Promise<LnurlCallbackResponseDto | { status: 'ERROR'; reason: string }> {
     // Validate amount parameter
     if (!amountStr) {
@@ -117,6 +119,20 @@ export class LnurlController {
       throw new BadRequestException('Lightspark public key not found')
     }
 
+    // Both invoice paths carry this as BOLT11 `h`. Strike (and any wallet
+    // still on the strict LUD-06 check) rejects an invoice without it.
+    // A misconfiguration here still answers in the LUD-06 error shape.
+    let descriptionHash: string
+    try {
+      descriptionHash = this.descriptionHashFor(lightningName.username)
+    } catch (err: any) {
+      // The detail names server configuration: log it, keep it off the wire.
+      this.logger.error(
+        `[${lightningName.username}] description hash unavailable: ${extractErrorReason(err)}`,
+      )
+      return { status: 'ERROR', reason: 'Service unavailable' }
+    }
+
     // Kill switch + per-user preference gate.
     const usdbEnabled = this.configService.get<string>('USDB_ENABLED')
     const defaultReceivingCurrency = lightningName.user.defaultReceivingCurrency
@@ -133,7 +149,11 @@ export class LnurlController {
     if (useUsdbRoute) {
       try {
         this.logger.log(`[${lightningName.username}] using usdb route`)
-        return await this.handleUsdbCallback(lightningName, amountMsat)
+        return await this.handleUsdbCallback(
+          lightningName,
+          amountMsat,
+          descriptionHash,
+        )
       } catch (err: any) {
         const reason = extractErrorReason(err)
         this.logger.warn(
@@ -147,7 +167,11 @@ export class LnurlController {
     // with HTTP 200, not as a thrown exception (which would surface as 5xx and
     // confuse compliant wallets). Catch any sats issuance failure here.
     try {
-      return await this.issueSatsBolt11(lightningName, amountMsat, comment)
+      return await this.issueSatsBolt11(
+        lightningName,
+        amountMsat,
+        descriptionHash,
+      )
     } catch (err: any) {
       const reason = extractErrorReason(err)
       this.logger.error(
@@ -155,6 +179,16 @@ export class LnurlController {
       )
       return { status: 'ERROR', reason }
     }
+  }
+
+  /** sha256 of the metadata string the endpoint above serves for `username`. */
+  private descriptionHashFor(username: string): string {
+    const publicBaseUrl = this.configService.get<string>('PUBLIC_BASE_URL')
+    if (!publicBaseUrl) {
+      throw new Error('PUBLIC_BASE_URL not configured')
+    }
+    const domain = getDomainFromBaseUrl(publicBaseUrl)
+    return lnurlPayDescriptionHash(buildLnurlPayMetadata(username, domain))
   }
 
   /**
@@ -166,6 +200,7 @@ export class LnurlController {
   private async handleUsdbCallback(
     lightningName: { id: string; linkingPubKeyHex: string; username: string },
     amountMsat: number,
+    descriptionHash: string,
   ): Promise<LnurlCallbackResponseDto> {
     const sparkNetwork = (this.configService.get<string>('SPARK_NETWORK') ??
       'MAINNET') as SparkNetwork
@@ -183,6 +218,7 @@ export class LnurlController {
       amountMsat,
       amountSats,
       recipientSparkAddress: recipient,
+      descriptionHash,
     })
 
     this.logger.log(
@@ -199,18 +235,12 @@ export class LnurlController {
   private async issueSatsBolt11(
     lightningName: { id: string; linkingPubKeyHex: string; username: string },
     amountMsat: number,
-    comment?: string,
+    descriptionHash: string,
   ): Promise<LnurlCallbackResponseDto> {
-    const domain = getDomainFromBaseUrl(
-      this.configService.get<string>('PUBLIC_BASE_URL')!,
-    )
-    const memo = comment
-      ? `${lightningName.username}@${domain}: ${comment}`
-      : `${lightningName.username}@${domain}`
     const invoiceResult = await this.lightsparkService.createInvoice(
       lightningName.linkingPubKeyHex,
       amountMsat,
-      memo,
+      descriptionHash,
     )
     await this.lnurlService.createInvoice({
       usernameId: lightningName.id,
