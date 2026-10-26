@@ -1,4 +1,4 @@
-// Offline integration check for the production ESM crypto loader on Node 20.
+// Offline integration check for the production ESM crypto loader.
 import { createHash, randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'

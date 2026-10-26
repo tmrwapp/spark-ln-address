@@ -57,11 +57,15 @@ Optional:
 - `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
 
 ## Run locally
-1) Install deps: `npm install`
-2) Start MySQL (dev): `docker-compose up -d mysql` (uses port 3308)
-3) Set env: `cp env.example .env` and fill values
-4) Generate Prisma client (after DB is reachable): `npx prisma generate`
-5) Start API: `npm run start:dev`
+
+Requires Node.js `>=24.22.1 <25`. The exact baseline is pinned in `.nvmrc`.
+
+1) Select the pinned runtime: `nvm use` (run `nvm install` first when needed)
+2) Install deps: `npm install`
+3) Start MySQL (dev): `docker-compose up -d mysql` (uses port 3308)
+4) Set env: `cp env.example .env` and fill values
+5) Generate Prisma client (after DB is reachable): `npx prisma generate`
+6) Start API: `npm run start:dev`
 
 Production build: `npm run build` then `npm run start:prod`.
 

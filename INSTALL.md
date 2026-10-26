@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js (v20+ recommended)
+- Node.js 24.22.1 or newer within the Node 24 LTS line (`>=24.22.1 <25`)
 - Docker and Docker Compose
 - PM2 for process management
 - NGINX (for reverse proxy and HTTPS)
@@ -26,11 +26,21 @@
 
 ### Install Dependencies
 
-```bash
-# Install Node.js dependencies
-npm install
+Install and select the runtime pinned in `.nvmrc`. For example, with `nvm`:
 
-# Install PM2 globally
+```bash
+nvm install
+nvm use
+node --version # must report v24.22.1 or a newer v24 release
+```
+
+Then install the locked dependencies and PM2:
+
+```bash
+# Install Node.js dependencies exactly as locked
+npm ci
+
+# Install PM2 globally for the selected Node runtime
 npm install -g pm2
 
 # Install Docker and Docker Compose (if not already installed)
@@ -111,10 +121,13 @@ npx prisma generate
 npm run build
 ```
 
-2. Start with PM2:
+2. Start with PM2 from the selected Node 24 environment:
 ```bash
 pm2 start ecosystem.config.cjs
+pm2 show spark-ln-address
 ```
+
+   Confirm that PM2 reports a Node version satisfying `>=24.22.1 <25`. The production configuration has `watch: false`, so future deployments require an explicit `pm2 restart spark-ln-address --update-env` after building.
 
 4. Save PM2 configuration and enable startup:
 ```bash
@@ -186,6 +199,27 @@ sudo apt install nginx certbot python3-certbot-nginx
    ```
 
 ## Maintenance
+
+### Updating the Node runtime
+
+When `.nvmrc` changes, migrate both the application process and the PM2 daemon to the pinned runtime:
+
+```bash
+nvm install
+nvm use
+node --version
+npm ci
+npx prisma generate
+npm run build
+npx prisma migrate deploy
+npm install -g pm2
+pm2 update
+pm2 restart spark-ln-address --update-env
+pm2 save
+pm2 show spark-ln-address
+```
+
+If PM2 startup was configured through a version-manager path, regenerate the startup service with `pm2 unstartup` followed by `pm2 startup`, then run the generated privileged command and `pm2 save`.
 
 - **Restart application**: `pm2 restart spark-ln-address`
 - **View logs**: `pm2 logs spark-ln-address`
