@@ -53,6 +53,17 @@ Engine ranges are admission checks, not proof of behavioral compatibility. Appro
 4. [Prisma Client 6.18.0 package metadata](https://github.com/prisma/prisma/blob/6.18.0/packages/client/package.json) — `node >=18.18` engine requirement.
 5. Repository-installed package metadata — exact resolved versions and engine declarations used in the compatibility table.
 
-## Verification status
+## Verification results
 
-Security and declared-engine compatibility are established. Behavioral verification on Node 24.22.1 is tracked separately and must pass before the upgrade is considered complete.
+The upgrade was verified on exactly Node.js `v24.22.1` with npm `11.19.1`:
+
+- `npm ci` completed from the committed lockfile.
+- `npx prisma generate` generated Prisma Client 6.18.0.
+- `npm run build` passed.
+- `npm test -- --runInBand` passed 24 suites and 349 tests.
+- `node --test test/lightning-invoice-recovery.mjs` passed the production ESM/crypto loader smoke test.
+- A separate verifier repeated the runtime, Prisma, build, unit-test, smoke-test, manifest-alignment, and tracked-tree checks successfully.
+
+Database-backed E2E tests were not run because this runtime-only change does not alter database behavior and those checks require starting and mutating the disposable MySQL test environment.
+
+The clean install reported 53 dependency audit findings, including 28 in the production dependency graph (13 moderate, 13 high, and 2 critical). Production dependencies did not change in this runtime upgrade, so those findings are pre-existing follow-up work rather than evidence against Node 24 compatibility. They must not be conflated with CVE-2026-111497, which is remediated by the Node runtime update rather than npm dependency changes.
