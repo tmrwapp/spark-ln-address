@@ -115,9 +115,12 @@ export class AuthService {
           data: { usedAt: now },
         })
         if (consumed.count !== 1) {
+          // Lost the race, or k1 expired since the read above: say which.
+          const current = await tx.authNonce.findUnique({ where: { k1 } })
+          const expired = !current?.usedAt && current?.expiresAt <= now
           throw new BadRequestException({
             status: 'ERROR',
-            reason: 'k1 already used',
+            reason: expired ? 'k1 expired' : 'k1 already used',
           })
         }
 
@@ -144,6 +147,14 @@ export class AuthService {
         throw new BadRequestException({
           status: 'ERROR',
           reason: 'Username already taken',
+        })
+      }
+      // Write conflict or deadlock between concurrent registrations. Nothing
+      // was committed and k1 is still unused, so the wallet may retry.
+      if ((error as { code?: unknown })?.code === 'P2034') {
+        throw new BadRequestException({
+          status: 'ERROR',
+          reason: 'Registration conflict, please retry',
         })
       }
       throw error

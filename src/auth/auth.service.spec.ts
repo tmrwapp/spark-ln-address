@@ -676,6 +676,63 @@ describe('AuthService', () => {
         response: { status: 'ERROR', reason: 'Invalid signature' },
       })
       expect(mockPrismaService.authNonce.updateMany).not.toHaveBeenCalled()
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled()
+    })
+
+    it('reports k1 expired when it expired between the read and the consume', async () => {
+      mockPrismaService.authNonce.updateMany.mockResolvedValue({ count: 0 })
+      mockPrismaService.authNonce.findUnique
+        .mockResolvedValueOnce({
+          id: 'nonce-race',
+          k1,
+          expiresAt: new Date(Date.now() + 1),
+          usedAt: null,
+          metadataJson: null,
+        })
+        .mockResolvedValueOnce({
+          id: 'nonce-race',
+          k1,
+          expiresAt: new Date(Date.now() - 1),
+          usedAt: null,
+          metadataJson: null,
+        })
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'late'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'k1 expired' },
+      })
+    })
+
+    it('a taken name fails the whole transaction, so the consume is rolled back for a retry', async () => {
+      mockPrismaService.lightningName.create.mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'taken'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Username already taken' },
+      })
+      // The consume ran inside the transaction that then threw: Prisma rolls
+      // it back, so usedAt stays NULL in the database.
+      expect(mockPrismaService.authNonce.updateMany).toHaveBeenCalledTimes(1)
+      expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('maps a transaction write conflict to a retryable LNURL error, not a 500', async () => {
+      mockPrismaService.$transaction.mockRejectedValue(
+        Object.assign(new Error('Write conflict'), { code: 'P2034' }),
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'conflict'),
+      ).rejects.toMatchObject({
+        response: {
+          status: 'ERROR',
+          reason: 'Registration conflict, please retry',
+        },
+      })
     })
   })
 
