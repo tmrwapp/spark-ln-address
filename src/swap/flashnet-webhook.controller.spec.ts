@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing'
-import { UnauthorizedException } from '@nestjs/common'
+import { Logger, UnauthorizedException } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { FlashnetWebhookController } from './flashnet-webhook.controller'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -83,6 +84,8 @@ describe('FlashnetWebhookController', () => {
   let swapServiceMock: ReturnType<typeof makeSwapServiceMock>
   let flashnetMock: ReturnType<typeof makeFlashnetMock>
 
+  let configValues: Record<string, string> = {}
+
   async function buildModule(verifyResult = true) {
     swapServiceMock = makeSwapServiceMock()
     flashnetMock = makeFlashnetMock(verifyResult)
@@ -93,6 +96,10 @@ describe('FlashnetWebhookController', () => {
         { provide: SwapService, useValue: swapServiceMock },
         { provide: PrismaService, useValue: makePrismaMock() },
         { provide: FLASHNET_SERVICE, useValue: flashnetMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => configValues[key] },
+        },
       ],
     }).compile()
 
@@ -240,6 +247,42 @@ describe('FlashnetWebhookController', () => {
         UnauthorizedException,
       )
       expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
+    })
+
+    it('honours a custom FLASHNET_WEBHOOK_MAX_SKEW_MS', async () => {
+      configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: '1000' }
+      await buildModule()
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': String(Date.now() - 5_000),
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
+      configValues = {}
+    })
+
+    it('warns and keeps the default when FLASHNET_WEBHOOK_MAX_SKEW_MS is invalid', async () => {
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
+      configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: 'soon' }
+      await buildModule()
+      configValues = {}
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'flashnet.webhook_invalid_max_skew' }),
+      )
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': String(Date.now() - 60_000),
+        },
+      })
+      await expect(controller.handleWebhook(req)).resolves.toBeUndefined()
     })
 
     it('non-numeric timestamp → 401', async () => {

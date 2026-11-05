@@ -16,6 +16,8 @@ import {
 } from './flashnet.types'
 import { validateLightningQuote } from './lightning-quote-validation'
 
+const MISSING_SECRET_LOG_INTERVAL_MS = 60_000
+
 @Injectable()
 export class FlashnetService implements OnModuleInit {
   private readonly logger = new Logger(FlashnetService.name)
@@ -23,6 +25,7 @@ export class FlashnetService implements OnModuleInit {
   private readonly apiBase: string
   private readonly apiKey: string
   private readonly webhookSecret: string
+  private lastMissingSecretLogAt = Number.NEGATIVE_INFINITY
 
   constructor(private readonly config: ConfigService) {
     this.apiBase =
@@ -44,7 +47,16 @@ export class FlashnetService implements OnModuleInit {
     }
   }
 
+  /**
+   * Logged at most once a minute: an unauthenticated caller must not be able
+   * to flood the error log by posting webhooks.
+   */
   private logMissingSecret(): void {
+    const now = Date.now()
+    if (now - this.lastMissingSecretLogAt < MISSING_SECRET_LOG_INTERVAL_MS) {
+      return
+    }
+    this.lastMissingSecretLogAt = now
     this.logger.error(
       { event: 'flashnet.webhook_secret_missing' },
       'FLASHNET_WEBHOOK_SECRET is not set: every Flashnet webhook is REJECTED until it is configured',
@@ -219,8 +231,12 @@ export class FlashnetService implements OnModuleInit {
         .update(payload)
         .digest('hex')
 
-      const expectedBuf = Buffer.from(expected, 'utf8')
-      const receivedBuf = Buffer.from(signature, 'utf8')
+      // Compare the raw 32-byte digests; anything but 64 hex chars is refused.
+      if (!/^[0-9a-fA-F]{64}$/.test(signature)) {
+        return false
+      }
+      const expectedBuf = Buffer.from(expected, 'hex')
+      const receivedBuf = Buffer.from(signature, 'hex')
 
       // timingSafeEqual throws if lengths differ — guard explicitly.
       if (expectedBuf.length !== receivedBuf.length) {

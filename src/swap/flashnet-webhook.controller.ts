@@ -4,7 +4,6 @@ import {
   HttpStatus,
   Inject,
   Logger,
-  Optional,
   Post,
   Req,
   UnauthorizedException,
@@ -44,15 +43,26 @@ export class FlashnetWebhookController {
     private readonly prisma: PrismaService,
     @Inject(FLASHNET_SERVICE)
     private readonly flashnet: FlashnetService | FlashnetMockService,
-    @Optional() config?: ConfigService,
+    config: ConfigService,
   ) {
-    const configured = Number(
-      config?.get<string>('FLASHNET_WEBHOOK_MAX_SKEW_MS'),
+    this.maxSkewMs = this.readMaxSkewMs(
+      config.get<string>('FLASHNET_WEBHOOK_MAX_SKEW_MS'),
     )
-    this.maxSkewMs =
-      Number.isFinite(configured) && configured > 0
-        ? configured
-        : DEFAULT_WEBHOOK_MAX_SKEW_MS
+  }
+
+  private readMaxSkewMs(raw: string | undefined): number {
+    if (raw === undefined || raw === '') {
+      return DEFAULT_WEBHOOK_MAX_SKEW_MS
+    }
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value <= 0) {
+      this.logger.warn({
+        event: 'flashnet.webhook_invalid_max_skew',
+        fallbackMs: DEFAULT_WEBHOOK_MAX_SKEW_MS,
+      })
+      return DEFAULT_WEBHOOK_MAX_SKEW_MS
+    }
+    return value
   }
 
   @Post('webhook')
@@ -78,8 +88,10 @@ export class FlashnetWebhookController {
     }
 
     // Freshness: a captured, correctly signed event cannot be replayed after
-    // the window closes (issue 31). Dedupe on (orderId, event, timestamp)
-    // covers replays inside the window.
+    // the window closes (issue 31). Inside the window an exact replay is a
+    // no-op through SwapService.applyWebhookEvent's dedupe on
+    // (orderId, event, timestamp); the HMAC covers the timestamp, so it cannot
+    // be changed to dodge that key.
     if (!isFreshTimestamp(timestamp, Date.now(), this.maxSkewMs)) {
       this.logger.warn({
         event: 'flashnet.webhook_stale_timestamp',
