@@ -43,7 +43,8 @@ Lightning Address provider for Spark-based mobile apps. It implements LNURL-Pay 
   - Returns `{ tag: 'login', k1, callback }` with 5-minute expiry stored in DB.
 - `GET /v1/auth/lnurl/callback?k1=...&sig=...&key=...&username=...`
   - Verifies signature over `k1` with provided pubkey.
-  - Normalizes/validates username, checks availability, stores Lightning Name, and marks nonce as used.
+  - Normalizes/validates username, refuses reserved names (`{ status: 'ERROR', reason: 'Username is reserved' }`), checks availability, stores Lightning Name, and marks nonce as used.
+  - Reserved names: a built-in brand/support/role list (`src/config/reserved-usernames.ts`) plus the comma-separated `RESERVED_USERNAMES` env value. Lookalikes are refused too. `PATCH /v1/users/me/username` applies the same list (`USERNAME_RESERVED`); names an account already owns stay valid.
 
 ## Configuration
 Copy `env.example` to `.env` and adjust as needed.

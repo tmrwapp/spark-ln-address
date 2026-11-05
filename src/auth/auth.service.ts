@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { randomBytes } from 'crypto'
 import { verifySignature } from './secp256k1.utils'
+import { isReservedUsername } from '../config/reserved-usernames'
 
 @Injectable()
 export class AuthService {
@@ -31,6 +32,21 @@ export class AuthService {
     return { k1, callback }
   }
 
+  /**
+   * Brand, support and role names cannot be registered (issue 32). Ownership
+   * itself is proven by the k1 signature: the name is bound to exactly the key
+   * that signed, and the Spark address served for it derives from that key.
+   */
+  private rejectReservedUsername(username: string): void {
+    const extra = this.configService.get<string>('RESERVED_USERNAMES')
+    if (isReservedUsername(username, extra)) {
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Username is reserved',
+      })
+    }
+  }
+
   async verifyAndBindUsername(
     k1: string,
     sig: string,
@@ -38,6 +54,7 @@ export class AuthService {
     rawUsername: string,
   ): Promise<{ status: 'OK' }> {
     const username = normalizeUsername(rawUsername)
+    this.rejectReservedUsername(username)
 
     // Find and validate nonce
     const nonce = await this.prisma.authNonce.findUnique({
