@@ -5,7 +5,12 @@ import { normalizeUsername, getDomainFromBaseUrl } from '../common/utils'
 import { encodeSparkAddress, SparkNetwork } from '../common/spark-address.utils'
 import { UsernameQueryResponseDto } from '../common/username-query-response.dto'
 import { PubKeyQueryResponseDto } from '../common/pubkey-query-response.dto'
-import { errorForLog, sanitizeForLog } from '../common/log-sanitize'
+import {
+  LOG_PUBKEY_MAX_LENGTH,
+  errorForLog,
+  logLine,
+  sanitizeForLog,
+} from '../common/log-sanitize'
 
 @Injectable()
 export class QueryService {
@@ -43,10 +48,12 @@ export class QueryService {
   async queryByPubKey(
     pubKey: string,
   ): Promise<UsernameQueryResponseDto | null> {
-    this.logger.log({
-      event: 'query.by_pubkey',
-      pubKey: sanitizeForLog(pubKey),
-    })
+    this.logger.log(
+      logLine({
+        event: 'query.by_pubkey',
+        pubKey: sanitizeForLog(pubKey, LOG_PUBKEY_MAX_LENGTH),
+      }),
+    )
     const lightningName = await this.findLightningNameByPubKey(pubKey)
     if (!lightningName) {
       return null
@@ -73,10 +80,12 @@ export class QueryService {
         network,
       )
     } catch (error) {
-      this.logger.error({
-        event: 'query.spark_address_encoding_failed',
-        error: errorForLog(error),
-      })
+      this.logger.error(
+        logLine({
+          event: 'query.spark_address_encoding_failed',
+          error: errorForLog(error),
+        }),
+      )
       // We still return the response but without sparkAddress if it fails for some reason
       // though ideally linkingPubKeyHex is always valid if it's in the DB
     }
@@ -90,10 +99,12 @@ export class QueryService {
   }
 
   async queryByUsername(username: string): Promise<PubKeyQueryResponseDto[]> {
-    this.logger.log({
-      event: 'query.by_username',
-      username: sanitizeForLog(username),
-    })
+    this.logger.log(
+      logLine({
+        event: 'query.by_username',
+        username: sanitizeForLog(username),
+      }),
+    )
     const lightningNames = await this.findLightningNameByUsername(username)
     if (!lightningNames.length) {
       return []
@@ -118,10 +129,12 @@ export class QueryService {
             network,
           )
         } catch (error) {
-          this.logger.error({
-            event: 'query.spark_address_encoding_failed',
-            error: errorForLog(error),
-          })
+          this.logger.error(
+            logLine({
+              event: 'query.spark_address_encoding_failed',
+              error: errorForLog(error),
+            }),
+          )
         }
 
         return {

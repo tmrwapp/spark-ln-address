@@ -1,4 +1,9 @@
-import { describeSecret, errorForLog, sanitizeForLog } from './log-sanitize'
+import {
+  describeSecret,
+  errorForLog,
+  logLine,
+  sanitizeForLog,
+} from './log-sanitize'
 
 describe('log sanitising (issue 34)', () => {
   it('escapes CR/LF so a value cannot forge a second log line', () => {
@@ -28,6 +33,48 @@ describe('log sanitising (issue 34)', () => {
   it('never splits an escape sequence when truncating', () => {
     const out = sanitizeForLog('\n'.repeat(40), 5)
     expect(out).toBe('\\u000a'.repeat(5) + '...[40 chars]')
+  })
+
+  it.each([
+    ['C1 NEL', '\u0085'],
+    ['line separator', '\u2028'],
+    ['paragraph separator', '\u2029'],
+    ['right-to-left override', '\u202e'],
+    ['zero-width space', '\u200b'],
+    ['byte order mark', '\ufeff'],
+    ['isolate', '\u2066'],
+  ])('escapes the %s character', (_name, char) => {
+    const out = sanitizeForLog(`a${char}b`, 200)
+    expect(out).not.toContain(char)
+    expect(out).toMatch(/^a\\u[0-9a-f]{4}b$/)
+  })
+
+  it('keeps exactly 32 characters, and notes the length from 33 on', () => {
+    expect(sanitizeForLog('x'.repeat(32))).toBe('x'.repeat(32))
+    expect(sanitizeForLog('x'.repeat(33))).toBe(
+      'x'.repeat(32) + '...[33 chars]',
+    )
+  })
+
+  it('never leaves half of a surrogate pair at the cut', () => {
+    const out = sanitizeForLog('x'.repeat(31) + '\ud83d\ude00' + 'y')
+    expect(out.startsWith('x'.repeat(31) + '\ud83d\ude00')).toBe(true)
+    expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
+  })
+
+  it('keeps a whole uncompressed public key when given its limit', () => {
+    const key = '04' + 'ab'.repeat(64)
+    expect(sanitizeForLog(key, 130)).toBe(key)
+  })
+
+  it('renders one structured event as a single line', () => {
+    const line = logLine({ event: 'x', value: sanitizeForLog('a\nb', 200) })
+    expect(line).not.toMatch(/[\r\n]/)
+    expect(JSON.parse(line)).toEqual({ event: 'x', value: 'a\\u000ab' })
+  })
+
+  it('keeps the error name', () => {
+    expect(errorForLog(new TypeError('bad'))).toBe('TypeError: bad')
   })
 
   it('leaves short printable values untouched', () => {

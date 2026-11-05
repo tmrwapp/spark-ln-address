@@ -1,8 +1,10 @@
 import { Logger } from '@nestjs/common'
 import { createHash } from 'crypto'
 import {
+  LOG_PUBKEY_MAX_LENGTH,
   describeSecret,
   errorForLog,
+  logLine,
   sanitizeForLog,
 } from '../common/log-sanitize'
 
@@ -73,10 +75,12 @@ export function derToCompact(sigBytes: Buffer): Uint8Array {
 
     return Buffer.concat([normalize(r), normalize(s)])
   } catch (e) {
-    logger.error({
-      event: 'secp256k1.der_conversion_failed',
-      error: errorForLog(e),
-    })
+    logger.error(
+      logLine({
+        event: 'secp256k1.der_conversion_failed',
+        error: errorForLog(e),
+      }),
+    )
     return sigBytes
   }
 }
@@ -101,17 +105,21 @@ export async function verifySignature(
   try {
     // Validate sig is hex
     if (!/^[0-9a-fA-F]+$/.test(sig)) {
-      logger.error({ event: 'secp256k1.invalid_sig', sig: describeSecret(sig) })
+      logger.error(
+        logLine({ event: 'secp256k1.invalid_sig', sig: describeSecret(sig) }),
+      )
       return false
     }
 
     // Validate key format: 66 hex (compressed) or 130 hex (uncompressed)
     if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
-      logger.error({
-        event: 'secp256k1.invalid_key',
-        key: sanitizeForLog(key),
-        keyLength: key.length,
-      })
+      logger.error(
+        logLine({
+          event: 'secp256k1.invalid_key',
+          key: sanitizeForLog(key, LOG_PUBKEY_MAX_LENGTH),
+          keyLength: key.length,
+        }),
+      )
       return false
     }
 
@@ -122,11 +130,13 @@ export async function verifySignature(
     } else {
       // Caller passes a hex string — validate and convert
       if (!/^[0-9a-fA-F]+$/.test(message)) {
-        logger.error({
-          event: 'secp256k1.invalid_message',
-          message: sanitizeForLog(message),
-          messageLength: message.length,
-        })
+        logger.error(
+          logLine({
+            event: 'secp256k1.invalid_message',
+            message: sanitizeForLog(message),
+            messageLength: message.length,
+          }),
+        )
         return false
       }
       messageBytes = Buffer.from(message, 'hex')
@@ -165,20 +175,24 @@ export async function verifySignature(
       const messageUtf8Bytes = Buffer.from(message, 'utf8')
       const isUtf8Verify = verify(finalSigBytes, messageUtf8Bytes, pubKeyBytes)
       if (isUtf8Verify) {
-        logger.log({
-          event: 'secp256k1.verified_utf8_message',
-          key: sanitizeForLog(key, 16),
-        })
+        logger.log(
+          logLine({
+            event: 'secp256k1.verified_utf8_message',
+            key: sanitizeForLog(key, LOG_PUBKEY_MAX_LENGTH),
+          }),
+        )
         return true
       }
     }
 
     return false
   } catch (error) {
-    logger.error({
-      event: 'secp256k1.verify_failed',
-      error: errorForLog(error),
-    })
+    logger.error(
+      logLine({
+        event: 'secp256k1.verify_failed',
+        error: errorForLog(error),
+      }),
+    )
     return false
   }
 }
