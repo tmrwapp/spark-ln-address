@@ -9,10 +9,12 @@ import { CurrencyPreferenceModule } from './currency-preference/currency-prefere
 import { SwapModule } from './swap/swap.module'
 import { RefundCaseModule } from './refund-case/refund-case.module'
 import { UsernameModule } from './username/username.module'
+import { RateLimitModule } from './rate-limit/rate-limit.module'
 
 @Module({
   imports: [
     ConfigModule,
+    RateLimitModule,
     LnurlModule,
     AuthModule,
     QueryModule,

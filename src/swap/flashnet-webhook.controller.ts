@@ -11,6 +11,7 @@ import {
 import { Request } from 'express'
 import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { FlashnetService } from '../flashnet/flashnet.service'
+import { SkipThrottle } from '@nestjs/throttler'
 import { FlashnetMockService } from '../flashnet/flashnet.mock'
 import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
 import { SwapService } from './swap.service'
@@ -28,6 +29,8 @@ import { PrismaService } from '../prisma/prisma.service'
  * Raw body: relies on NestFactory.create({ rawBody: true }) wired in main.ts (PR3).
  */
 @Controller('v1/internal/flashnet')
+// HMAC-authenticated and sent in bursts by Flashnet: never rate limited.
+@SkipThrottle({ default: true, route: true })
 export class FlashnetWebhookController {
   private readonly logger = new Logger(FlashnetWebhookController.name)
 

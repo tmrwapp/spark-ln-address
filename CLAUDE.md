@@ -80,6 +80,11 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
   old `@unique` on `linkingPubKeyHex` (which now allows repeats) and enforces one active name per
   pubkey. Always write it in the same statement that flips `active`, and deactivate before
   activating or the unique index rejects the write.
+- **Rate limiting** (`src/rate-limit/`): global `LnurlThrottlerGuard` with the in-memory throttler
+  store, keyed by `req.ip` (needs `trust proxy`, set in `main.ts` from `TRUST_PROXY`). Like the
+  replay cache below it only holds under `instances: 1`. New sensitive routes get a
+  `@Throttle({ route: ... })`; webhook-style routes get `@SkipThrottle`.
+- **Expired `auth_nonces`** are purged by `AuthNoncePurgeService` (every 10 min, 1 h grace).
 - **Replay cache in `SparkSignatureGuard`** (process-local `Map`, TTL = `AUTH_MAX_SKEW_MS`):
   required because `PATCH /v1/users/me/username` is not idempotent. It only holds under
   `instances: 1` in `ecosystem.config.cjs`; scaling out needs shared storage.

@@ -54,7 +54,11 @@ Required:
 
 Optional:
 - `PORT` (default 3003)
-- `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
+- `RATE_LIMIT_WINDOW_MS` (default 60000), `RATE_LIMIT_MAX` (default 300): global per-client limit on every route except `/health` and the Flashnet webhook. Stricter per-route limits (per minute): `GET /v1/auth/lnurl` 30, `GET /v1/auth/lnurl/callback` 10, `GET /lnurl/callback/:username` 30 per client and name, `PATCH /v1/users/me/username` 10. Over the limit the response is HTTP 429 with `{ status: 'ERROR', reason: 'Too many requests, retry later' }` and `Retry-After`.
+- `RATE_LIMIT_ENABLED` (default true): `false` switches rate limiting off.
+- `TRUST_PROXY` (default `loopback, linklocal, uniquelocal`): Express `trust proxy`; the proxy in front must send `X-Forwarded-For`.
+
+Expired LNURL-auth nonces are deleted every 10 minutes, one hour after they expire.
 
 ## Run locally
 
