@@ -1,5 +1,10 @@
 import { Logger } from '@nestjs/common'
 import { createHash } from 'crypto'
+import {
+  describeSecret,
+  errorForLog,
+  sanitizeForLog,
+} from '../common/log-sanitize'
 
 const logger = new Logger('secp256k1.utils')
 
@@ -68,7 +73,10 @@ export function derToCompact(sigBytes: Buffer): Uint8Array {
 
     return Buffer.concat([normalize(r), normalize(s)])
   } catch (e) {
-    logger.error(`Error converting DER to compact: ${e.message}`)
+    logger.error({
+      event: 'secp256k1.der_conversion_failed',
+      error: errorForLog(e),
+    })
     return sigBytes
   }
 }
@@ -93,13 +101,17 @@ export async function verifySignature(
   try {
     // Validate sig is hex
     if (!/^[0-9a-fA-F]+$/.test(sig)) {
-      logger.error(`Invalid sig (not hex): ${sig}`)
+      logger.error({ event: 'secp256k1.invalid_sig', sig: describeSecret(sig) })
       return false
     }
 
     // Validate key format: 66 hex (compressed) or 130 hex (uncompressed)
     if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
-      logger.error(`Invalid key format: ${key}`)
+      logger.error({
+        event: 'secp256k1.invalid_key',
+        key: sanitizeForLog(key),
+        keyLength: key.length,
+      })
       return false
     }
 
@@ -110,7 +122,11 @@ export async function verifySignature(
     } else {
       // Caller passes a hex string — validate and convert
       if (!/^[0-9a-fA-F]+$/.test(message)) {
-        logger.error(`Invalid message (not hex): ${message}`)
+        logger.error({
+          event: 'secp256k1.invalid_message',
+          message: sanitizeForLog(message),
+          messageLength: message.length,
+        })
         return false
       }
       messageBytes = Buffer.from(message, 'hex')
@@ -149,16 +165,20 @@ export async function verifySignature(
       const messageUtf8Bytes = Buffer.from(message, 'utf8')
       const isUtf8Verify = verify(finalSigBytes, messageUtf8Bytes, pubKeyBytes)
       if (isUtf8Verify) {
-        logger.log(
-          `Signature verified using UTF-8 message encoding for key: ${key}`,
-        )
+        logger.log({
+          event: 'secp256k1.verified_utf8_message',
+          key: sanitizeForLog(key, 16),
+        })
         return true
       }
     }
 
     return false
   } catch (error) {
-    logger.error(`Error verifying signature: ${error}`)
+    logger.error({
+      event: 'secp256k1.verify_failed',
+      error: errorForLog(error),
+    })
     return false
   }
 }

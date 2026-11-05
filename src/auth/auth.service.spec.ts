@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing'
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { AuthService } from './auth.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -119,6 +119,84 @@ describe('AuthService', () => {
       const result2 = await service.generateAuthChallenge()
 
       expect(result1.k1).not.toBe(result2.k1)
+    })
+  })
+
+  describe('logging of request values (issue 34)', () => {
+    const k1 = 'd'.repeat(64)
+    let spies: jest.SpyInstance[]
+
+    function loggedStrings(): string[] {
+      const out: string[] = []
+      const walk = (v: unknown) => {
+        if (typeof v === 'string') out.push(v)
+        else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+      }
+      spies.forEach((spy) =>
+        spy.mock.calls.forEach((call) => call.forEach(walk)),
+      )
+      return out
+    }
+
+    beforeEach(() => {
+      spies = (['log', 'warn', 'error'] as const).map((m) =>
+        jest.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+      )
+      mockPrismaService.authNonce.findUnique.mockResolvedValue({
+        id: 'nonce-34',
+        k1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      })
+    })
+
+    afterEach(() => spies.forEach((spy) => spy.mockRestore()))
+
+    it('does not write a forged log line from an invalid sig', async () => {
+      const sig = 'nothex\n[Nest] LOG [AuthService] forged' + 'z'.repeat(5_000)
+      await expect(
+        service.verifyAndBindUsername(k1, sig, '02'.padEnd(66, '1'), 'alice'),
+      ).rejects.toThrow(BadRequestException)
+
+      const text = loggedStrings().join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text).not.toContain('forged')
+      expect(text.length).toBeLessThan(400)
+    })
+
+    it('escapes and truncates an invalid key', async () => {
+      const key = 'key\r\nINJECTED' + 'k'.repeat(5_000)
+      await expect(
+        service.verifyAndBindUsername(k1, 'ab'.repeat(32), key, 'alice'),
+      ).rejects.toThrow(BadRequestException)
+
+      const text = loggedStrings().join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text.length).toBeLessThan(400)
+    })
+
+    it('escapes and truncates an invalid k1', async () => {
+      const badK1 = 'k1\nINJECTED' + 'x'.repeat(5_000)
+      mockPrismaService.authNonce.findUnique.mockResolvedValue({
+        id: 'nonce-34b',
+        k1: badK1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      })
+      await expect(
+        service.verifyAndBindUsername(
+          badK1,
+          'ab'.repeat(32),
+          '02'.padEnd(66, '1'),
+          'alice',
+        ),
+      ).rejects.toThrow(BadRequestException)
+
+      const text = loggedStrings().join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text.length).toBeLessThan(400)
     })
   })
 

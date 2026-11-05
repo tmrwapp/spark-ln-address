@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
+import { describeSecret, sanitizeForLog } from '../common/log-sanitize'
 import { randomBytes } from 'crypto'
 import { verifySignature } from './secp256k1.utils'
 
@@ -61,12 +62,19 @@ export class AuthService {
 
     // Validate input formats before verifying (preserve existing behaviour)
     if (!/^[0-9a-fA-F]{64}$/.test(k1)) {
-      this.logger.error(`Invalid k1: ${k1}`)
+      this.logger.error({
+        event: 'lnurl_auth.invalid_k1',
+        k1: sanitizeForLog(k1),
+        k1Length: k1.length,
+      })
       throw new BadRequestException({ status: 'ERROR', reason: 'Invalid k1' })
     }
 
     if (!/^[0-9a-fA-F]+$/.test(sig)) {
-      this.logger.error(`Invalid sig: ${sig}`)
+      this.logger.error({
+        event: 'lnurl_auth.invalid_sig',
+        sig: describeSecret(sig),
+      })
       throw new BadRequestException({
         status: 'ERROR',
         reason: 'Invalid signature',
@@ -74,7 +82,11 @@ export class AuthService {
     }
 
     if (!/^[0-9a-fA-F]{66}$|^[0-9a-fA-F]{130}$/.test(key)) {
-      this.logger.error(`Invalid key: ${key}`)
+      this.logger.error({
+        event: 'lnurl_auth.invalid_key',
+        key: sanitizeForLog(key),
+        keyLength: key.length,
+      })
       throw new BadRequestException({ status: 'ERROR', reason: 'Invalid key' })
     }
 

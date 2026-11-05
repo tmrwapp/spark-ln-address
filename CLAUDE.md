@@ -91,6 +91,9 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
 
 - Throw `BadRequestException` / `NotFoundException` from controllers/services.
 - `private readonly logger = new Logger(ClassName.name)` in every service.
+- Never interpolate request-supplied values into log messages. Log them structured through
+  `sanitizeForLog` (escaped, truncated) and signatures/secrets only through `describeSecret`
+  (length only); see `src/common/log-sanitize.ts`.
 - LNURL-Auth error responses must be `{ status: 'ERROR', reason: string }` per spec.
 
 ## Env
