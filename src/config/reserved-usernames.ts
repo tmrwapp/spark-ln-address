@@ -31,11 +31,8 @@ const ROLES = [
 
 const STANDALONE = [
   'abuse',
-  'account',
-  'accounts',
   'admin',
   'administrator',
-  'api',
   'billing',
   'ceo',
   'compliance',
@@ -48,17 +45,12 @@ const STANDALONE = [
   'hostmaster',
   'info',
   'legal',
-  'lightning',
-  'lnurl',
-  'mail',
   'moderator',
   'no-reply',
   'noreply',
-  'null',
   'official',
   'operator',
   'orchestra',
-  'owner',
   'payments',
   'postmaster',
   'privacy',
@@ -66,19 +58,15 @@ const STANDALONE = [
   'refunds',
   'root',
   'security',
-  'spark',
   'staff',
-  'status',
   'superuser',
   'support',
   'sysadmin',
   'system',
   'team',
-  'undefined',
   'verify',
   'verification',
   'webmaster',
-  'www',
 ]
 
 export const DEFAULT_RESERVED_USERNAMES: readonly string[] = Object.freeze([
@@ -86,7 +74,10 @@ export const DEFAULT_RESERVED_USERNAMES: readonly string[] = Object.freeze([
     ...STANDALONE,
     ...BRANDS,
     ...BRANDS.flatMap((brand) =>
-      ROLES.flatMap((role) => [`${brand}${role}`, `${role}${brand}`]),
+      [...ROLES, ...STANDALONE].flatMap((role) => [
+        `${brand}${role}`,
+        `${role}${brand}`,
+      ]),
     ),
   ]),
 ])
@@ -96,22 +87,34 @@ const LOOKALIKES: Record<string, string> = {
   '0': 'o',
   '1': 'i',
   l: 'i',
+  '2': 'z',
   '3': 'e',
   '4': 'a',
   '5': 's',
+  '6': 'g',
   '7': 't',
   '8': 'b',
+  '9': 'g',
 }
 
 /**
- * Collapses a username to a comparison key: lowercase, separators removed,
- * lookalike characters folded. `Gu4p.Supp0rt` and `guapsupport` share a key.
+ * Collapses a username to a comparison key, so `Gu4p.Supp0rt`, `guap_suport`,
+ * `support1` and `guapsupport` all share one:
+ * 1. lowercase, separators `._-` removed;
+ * 2. trailing digits removed (`support1`), unless the name is all digits;
+ * 3. multi-letter lookalikes folded (`rn` to `m`, `vv` to `w`);
+ * 4. digit and letter lookalikes folded (`0` to `o`, `1` and `l` to `i`, ...);
+ * 5. repeated characters collapsed (`suppport`, `guapp`).
+ * Unicode homoglyphs cannot occur: normalizeUsername allows `[a-z0-9._-]` only.
  */
 export function usernameSkeleton(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[._-]/g, '')
-    .replace(/[0134578l]/g, (c) => LOOKALIKES[c] ?? c)
+  const compact = name.toLowerCase().replace(/[._-]/g, '')
+  const trimmed = compact.replace(/\d+$/, '') || compact
+  return trimmed
+    .replace(/rn/g, 'm')
+    .replace(/vv/g, 'w')
+    .replace(/[0-9l]/g, (c) => LOOKALIKES[c] ?? c)
+    .replace(/(.)\1+/g, '$1')
 }
 
 const DEFAULT_SKELETONS = new Set(

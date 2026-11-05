@@ -21,16 +21,36 @@ describe('reserved usernames (issue 32)', () => {
     'guap-official',
     'help.desk',
     's3curity',
+    'support1',
+    'suport',
+    'guapp',
+    '9uap',
+    'tmrvv',
+    'guapbilling',
+    'refundguap',
+    'adrnin',
   ])('rejects the lookalike %s', (name) => {
     expect(isReservedUsername(name)).toBe(true)
   })
 
-  it.each(['alice', 'bob', 'guapo', 'satoshi', 'helpful', 'administrators1'])(
-    'allows the ordinary name %s',
-    (name) => {
-      expect(isReservedUsername(name)).toBe(false)
-    },
-  )
+  it.each([
+    'alice',
+    'bob',
+    'guapo',
+    'satoshi',
+    'helpful',
+    'administrators1',
+    'lily',
+    'carlos',
+    'ellie',
+    'bob2',
+    'owner',
+    'status',
+    'spark',
+    'lightning',
+  ])('allows the ordinary name %s', (name) => {
+    expect(isReservedUsername(name)).toBe(false)
+  })
 
   it('extends the defaults with the RESERVED_USERNAMES config value', () => {
     expect(isReservedUsername('mateus')).toBe(false)

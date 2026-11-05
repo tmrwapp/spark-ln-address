@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { randomBytes } from 'crypto'
-import { verifySignature } from './secp256k1.utils'
+import { equivalentPubKeyForms, verifySignature } from './secp256k1.utils'
 import { isReservedUsername } from '../config/reserved-usernames'
 
 @Injectable()
@@ -47,6 +47,25 @@ export class AuthService {
     }
   }
 
+  /**
+   * One active name per key. The activePubKey unique index compares strings,
+   * so the same key sent in its other encoding (compressed vs uncompressed)
+   * would slip past it and let one key hold several names (issue 32).
+   */
+  private async rejectKeyWithActiveName(key: string): Promise<void> {
+    const forms = await equivalentPubKeyForms(key)
+    const holder = await this.prisma.lightningName.findFirst({
+      where: { activePubKey: { in: forms } },
+      select: { id: true },
+    })
+    if (holder) {
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Key already has a username',
+      })
+    }
+  }
+
   async verifyAndBindUsername(
     k1: string,
     sig: string,
@@ -54,7 +73,6 @@ export class AuthService {
     rawUsername: string,
   ): Promise<{ status: 'OK' }> {
     const username = normalizeUsername(rawUsername)
-    this.rejectReservedUsername(username)
 
     // Find and validate nonce
     const nonce = await this.prisma.authNonce.findUnique({
@@ -102,6 +120,10 @@ export class AuthService {
         reason: 'Invalid signature',
       })
     }
+
+    // After the signature, so an unauthenticated caller cannot probe the list.
+    this.rejectReservedUsername(username)
+    await this.rejectKeyWithActiveName(key)
 
     // Check if username is available. This deliberately does NOT filter on
     // `active`, so a name retired by a username change stays permanently

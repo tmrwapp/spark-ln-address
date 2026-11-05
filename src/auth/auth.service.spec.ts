@@ -29,6 +29,7 @@ describe('AuthService', () => {
     },
     lightningName: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
     },
     user: {
@@ -668,6 +669,8 @@ describe('AuthService', () => {
       })
       mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
       mockPrismaService.user.create.mockResolvedValue({ id: 'user-32' })
+      mockPrismaService.lightningName.findFirst.mockReset()
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(null)
       mockPrismaService.lightningName.create.mockResolvedValue({})
       mockPrismaService.authNonce.update.mockResolvedValue({})
     })
@@ -687,14 +690,44 @@ describe('AuthService', () => {
 
     it('refuses a name reserved through RESERVED_USERNAMES', async () => {
       mockConfigService.get.mockImplementation((k: string) =>
-        k === 'RESERVED_USERNAMES' ? 'ceo' : undefined,
+        k === 'RESERVED_USERNAMES' ? 'acme' : undefined,
       )
 
       await expect(
-        service.verifyAndBindUsername(k1, sig, key, 'ceo'),
+        service.verifyAndBindUsername(k1, sig, key, 'acme'),
       ).rejects.toMatchObject({
         response: { status: 'ERROR', reason: 'Username is reserved' },
       })
+      mockConfigService.get.mockReset()
+    })
+
+    it('does not reveal the reserved list before the signature is verified', async () => {
+      const otherKey = Buffer.from(
+        getPublicKey(new Uint8Array(randomBytes(32)), true),
+      ).toString('hex')
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, otherKey, 'admin'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Invalid signature' },
+      })
+    })
+
+    it('refuses a second name for a key already active in its other encoding', async () => {
+      const uncompressed = Buffer.from(getPublicKey(priv, false)).toString(
+        'hex',
+      )
+      mockPrismaService.lightningName.findFirst.mockImplementation(
+        async ({ where }) =>
+          where.activePubKey.in.includes(key) ? { id: 'ln-existing' } : null,
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, uncompressed, 'second'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Key already has a username' },
+      })
+      expect(mockPrismaService.lightningName.create).not.toHaveBeenCalled()
     })
 
     it("refuses to bind a name to someone else's key (and so their Spark address)", async () => {

@@ -158,7 +158,29 @@ describe('UsernameService', () => {
 
       await expect(
         service.changeUsername('user-1', 'adm1n'),
-      ).rejects.toBeInstanceOf(BadRequestException)
+      ).rejects.toMatchObject({ response: { code: 'USERNAME_RESERVED' } })
+    })
+
+    it('answers USERNAME_RESERVED even when the change quota is spent', async () => {
+      mockPrismaService.lightningName.findMany.mockResolvedValue([
+        makeRow(),
+        makeRow({
+          id: 'ln-b',
+          username: 'b',
+          active: false,
+          activePubKey: null,
+        }),
+        makeRow({
+          id: 'ln-c',
+          username: 'c',
+          active: false,
+          activePubKey: null,
+        }),
+      ])
+
+      await expect(
+        service.changeUsername('user-1', 'support'),
+      ).rejects.toMatchObject({ response: { code: 'USERNAME_RESERVED' } })
     })
 
     it('still lets a user switch back to a reserved name they already own', async () => {

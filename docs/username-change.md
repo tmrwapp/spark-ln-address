@@ -307,6 +307,7 @@ accurately.
 | 200 | — | Name changed or switched back. |
 | 400 | `INVALID_USERNAME` | Fails `^[a-z0-9._-]{1,30}$` in `normalizeUsername`. |
 | 400 | `SAME_USERNAME` | Target equals the currently active name. Rejected rather than treated as a silent no-op, so the client never reports a change that did not happen. |
+| 400 | `USERNAME_RESERVED` | Target is a reserved brand, support or role name, or a lookalike (`src/config/reserved-usernames.ts`, plus `RESERVED_USERNAMES`). Checked only for a name the account does not already own. |
 | 401 | — | Guard rejection: missing headers, timestamp skew, bad signature, unknown pubkey, or a replayed request. |
 | 409 | `USERNAME_TAKEN` | The name is active or retired under any account, including a name retired by a different user. |
 | 409 | `CHANGE_LIMIT_REACHED` | The user's ceiling of `2 + bonusUsernameChanges` new names is already spent and the target is not in this user's history. |
@@ -328,10 +329,13 @@ One transaction, five checks. `UsernameService.changeUsername(userId, rawUsernam
    the target.
 3. **Classify the request.** Target present in the user's own rows means *switch back*, free and
    always permitted. Otherwise it is a *new claim* and consumes quota.
-4. **Gate the new claim.** Reject with `409 CHANGE_LIMIT_REACHED` when
+4. **Refuse reserved names.** A target the account does not already own is rejected with
+   `400 USERNAME_RESERVED` when it, or a lookalike, is reserved. Switching back to an owned name
+   skips this, so names claimed before the list existed stay usable.
+5. **Gate the new claim.** Reject with `409 CHANGE_LIMIT_REACHED` when
    `rows.length - 1 >= 2 + user.bonusUsernameChanges`. Then check global availability; a hit
    anywhere in `lightning_names` is `409 USERNAME_TAKEN`.
-5. **Apply in one transaction.** Set the current active row to `active: false`, then either flip
+6. **Apply in one transaction.** Set the current active row to `active: false`, then either flip
    the existing target row to `active: true` or insert a new row with the same `linkingPubKeyHex`.
    Catch Prisma `P2002` and map it to `409 USERNAME_TAKEN`, which closes the check-then-act window.
 
