@@ -100,10 +100,27 @@ export class AuthService {
       })
     }
 
-    // Create user and bind username. Both in one transaction so a losing race
-    // on the username does not leave an orphaned User row behind.
+    // Consume k1, create the user and bind the username in one transaction.
+    // The nonce read above only produces friendly error reasons; this
+    // conditional update is the real single-use gate. Under concurrency the
+    // second request blocks on the row lock, then re-reads usedAt as set and
+    // changes zero rows, so exactly one request per k1 can succeed. A failure
+    // later in the transaction (a taken name) rolls the consume back, so the
+    // wallet may retry the same k1 with another name, as before.
     try {
       await this.prisma.$transaction(async (tx) => {
+        const now = new Date()
+        const consumed = await tx.authNonce.updateMany({
+          where: { k1, usedAt: null, expiresAt: { gt: now } },
+          data: { usedAt: now },
+        })
+        if (consumed.count !== 1) {
+          throw new BadRequestException({
+            status: 'ERROR',
+            reason: 'k1 already used',
+          })
+        }
+
         const user = await tx.user.create({
           data: {},
         })
@@ -131,12 +148,6 @@ export class AuthService {
       }
       throw error
     }
-
-    // Mark nonce as used
-    await this.prisma.authNonce.update({
-      where: { k1 },
-      data: { usedAt: new Date() },
-    })
 
     return { status: 'OK' }
   }

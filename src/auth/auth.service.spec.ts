@@ -26,6 +26,7 @@ describe('AuthService', () => {
       create: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     lightningName: {
       findUnique: jest.fn(),
@@ -66,6 +67,8 @@ describe('AuthService', () => {
     mockPrismaService.$transaction.mockImplementation(
       async (callback: (tx: unknown) => unknown) => callback(mockPrismaService),
     )
+    // The conditional consume wins by default; replay tests override it.
+    mockPrismaService.authNonce.updateMany.mockResolvedValue({ count: 1 })
   })
 
   it('should be defined', () => {
@@ -206,10 +209,16 @@ describe('AuthService', () => {
           activePubKey: validPublicKey,
         },
       })
-      expect(mockPrismaService.authNonce.update).toHaveBeenCalledWith({
-        where: { k1: validK1 },
+      expect(mockPrismaService.authNonce.updateMany).toHaveBeenCalledWith({
+        where: {
+          k1: validK1,
+          usedAt: null,
+          expiresAt: { gt: expect.any(Date) },
+        },
         data: { usedAt: expect.any(Date) },
       })
+      // The unconditional post-commit update is gone: it was the race.
+      expect(mockPrismaService.authNonce.update).not.toHaveBeenCalled()
     })
 
     it('should successfully verify using UTF-8 k1 encoding', async () => {
@@ -579,6 +588,94 @@ describe('AuthService', () => {
       )
 
       expect(result).toEqual({ status: 'OK' })
+    })
+  })
+
+  describe('k1 single use (issue 33)', () => {
+    const k1 = 'b'.repeat(64)
+    let sig: string
+    let key: string
+
+    beforeEach(() => {
+      const priv = new Uint8Array(randomBytes(32))
+      key = Buffer.from(getPublicKey(priv, true)).toString('hex')
+      sig = Buffer.from(sign(Buffer.from(k1, 'hex'), priv)).toString('hex')
+      mockPrismaService.authNonce.findUnique.mockResolvedValue({
+        id: 'nonce-race',
+        k1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      })
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
+      mockPrismaService.user.create.mockResolvedValue({ id: 'user-race' })
+      mockPrismaService.lightningName.create.mockResolvedValue({})
+    })
+
+    it('rejects a replay that passed the read check but lost the conditional consume', async () => {
+      // Both requests read usedAt = null; the other one consumed k1 first.
+      mockPrismaService.authNonce.updateMany.mockResolvedValue({ count: 0 })
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'replayer'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'k1 already used' },
+      })
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled()
+      expect(mockPrismaService.lightningName.create).not.toHaveBeenCalled()
+    })
+
+    it('lets exactly one of two concurrent callbacks with the same k1 succeed', async () => {
+      let consumed = false
+      mockPrismaService.authNonce.updateMany.mockImplementation(async () => {
+        const count = consumed ? 0 : 1
+        consumed = true
+        return { count }
+      })
+
+      const results = await Promise.allSettled([
+        service.verifyAndBindUsername(k1, sig, key, 'first'),
+        service.verifyAndBindUsername(k1, sig, key, 'second'),
+      ])
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1)
+      expect(mockPrismaService.lightningName.create).toHaveBeenCalledTimes(1)
+    })
+
+    it('consumes k1 inside the transaction, before the user and name are created', async () => {
+      const order: string[] = []
+      mockPrismaService.authNonce.updateMany.mockImplementation(async () => {
+        order.push('consume')
+        return { count: 1 }
+      })
+      mockPrismaService.user.create.mockImplementation(async () => {
+        order.push('user')
+        return { id: 'user-race' }
+      })
+      mockPrismaService.lightningName.create.mockImplementation(async () => {
+        order.push('name')
+        return {}
+      })
+
+      await service.verifyAndBindUsername(k1, sig, key, 'ordered')
+
+      expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1)
+      expect(order).toEqual(['consume', 'user', 'name'])
+    })
+
+    it('does not consume k1 when the signature is invalid', async () => {
+      const otherPriv = new Uint8Array(randomBytes(32))
+      const forged = Buffer.from(
+        sign(Buffer.from(k1, 'hex'), otherPriv),
+      ).toString('hex')
+
+      await expect(
+        service.verifyAndBindUsername(k1, forged, key, 'forger'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Invalid signature' },
+      })
+      expect(mockPrismaService.authNonce.updateMany).not.toHaveBeenCalled()
     })
   })
 
