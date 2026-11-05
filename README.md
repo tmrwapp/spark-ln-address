@@ -52,6 +52,11 @@ Required:
 - `DATABASE_URL` — MySQL connection (dev compose maps `3308->3306`).
 - `PUBLIC_BASE_URL` — public URL used to build LNURL callbacks/metadata.
 
+Required in production for the USDB route and its webhook:
+- `FLASHNET_API_KEY`: without it USDB quotes fail and fall back to sats. The Flashnet mock is used only under `NODE_ENV=test`.
+- `FLASHNET_WEBHOOK_SECRET`: without it every `POST /v1/internal/flashnet/webhook` is rejected with 401 and the service logs `flashnet.webhook_secret_missing`.
+- `FLASHNET_WEBHOOK_MAX_SKEW_MS` is optional (default 300000): webhooks whose `X-Flashnet-Timestamp` is further than this from the server clock are rejected.
+
 Optional:
 - `PORT` (default 3003)
 - `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`

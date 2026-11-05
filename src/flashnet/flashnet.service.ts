@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   Injectable,
   Logger,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
@@ -16,7 +17,7 @@ import {
 import { validateLightningQuote } from './lightning-quote-validation'
 
 @Injectable()
-export class FlashnetService {
+export class FlashnetService implements OnModuleInit {
   private readonly logger = new Logger(FlashnetService.name)
 
   private readonly apiBase: string
@@ -30,6 +31,24 @@ export class FlashnetService {
     this.apiKey = this.config.get<string>('FLASHNET_API_KEY') ?? ''
     this.webhookSecret =
       this.config.get<string>('FLASHNET_WEBHOOK_SECRET') ?? ''
+  }
+
+  /**
+   * Boot-time warning. The service still starts, because the Lightning
+   * address endpoints do not need the webhook, but every webhook is rejected
+   * until the secret is set (see verifyWebhookSignature).
+   */
+  onModuleInit(): void {
+    if (!this.webhookSecret) {
+      this.logMissingSecret()
+    }
+  }
+
+  private logMissingSecret(): void {
+    this.logger.error(
+      { event: 'flashnet.webhook_secret_missing' },
+      'FLASHNET_WEBHOOK_SECRET is not set: every Flashnet webhook is REJECTED until it is configured',
+    )
   }
 
   /**
@@ -179,12 +198,19 @@ export class FlashnetService {
    *
    * Uses crypto.timingSafeEqual for constant-time comparison to prevent timing
    * attacks. Returns false (not throw) if lengths differ.
+   *
+   * Fails closed: with no secret configured every signature is rejected,
+   * since an HMAC keyed with the empty string is computable by anyone.
    */
   verifyWebhookSignature(
     rawBody: Buffer | string,
     signature: string,
     timestamp: string,
   ): boolean {
+    if (!this.webhookSecret) {
+      this.logMissingSecret()
+      return false
+    }
     try {
       const bodyStr =
         rawBody instanceof Buffer ? rawBody.toString('utf8') : rawBody

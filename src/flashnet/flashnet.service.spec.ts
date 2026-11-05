@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { ConfigService } from '@nestjs/config'
 import {
   BadGatewayException,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { createHmac } from 'crypto'
@@ -598,6 +599,57 @@ describe('FlashnetService', () => {
   // verifyWebhookSignature — catch block (lines 169-173)
   // -------------------------------------------------------------------------
 
+  describe('verifyWebhookSignature — missing secret fails closed (issue 31)', () => {
+    async function buildWithSecret(secret: string | undefined) {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          FlashnetService,
+          {
+            provide: ConfigService,
+            useValue: makeConfigService(
+              secret === undefined ? {} : { FLASHNET_WEBHOOK_SECRET: secret },
+            ),
+          },
+        ],
+      }).compile()
+      return module.get(FlashnetService)
+    }
+
+    it('rejects a body signed with an empty key when the secret is empty', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined)
+      const svc = await buildWithSecret('')
+      const ts = String(Date.now())
+      const body = '{"event":"order.failed"}'
+      // What an attacker computes when they guess the secret is unset.
+      const forged = createHmac('sha256', '')
+        .update(`${ts}.${body}`)
+        .digest('hex')
+
+      expect(svc.verifyWebhookSignature(body, forged, ts)).toBe(false)
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'flashnet.webhook_secret_missing' }),
+        expect.any(String),
+      )
+      errorSpy.mockRestore()
+    })
+
+    it('logs loudly at boot when the secret is missing', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined)
+      const svc = await buildWithSecret('')
+      svc.onModuleInit()
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'flashnet.webhook_secret_missing' }),
+        expect.any(String),
+      )
+      errorSpy.mockRestore()
+    })
+  })
+
   describe('verifyWebhookSignature — unexpected crypto error', () => {
     it('returns false (not throw) when createHmac throws unexpectedly', () => {
       // Force the catch block by making the webhookSecret something that
@@ -626,7 +678,41 @@ describe('FlashnetService', () => {
 // ---------------------------------------------------------------------------
 
 describe('FlashnetModule factory', () => {
-  it('returns FlashnetMockService when FLASHNET_API_KEY is empty', async () => {
+  const originalNodeEnv = process.env.NODE_ENV
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv
+    jest.restoreAllMocks()
+  })
+
+  it('never selects the mock outside tests, even without FLASHNET_API_KEY (issue 31)', async () => {
+    process.env.NODE_ENV = 'production'
+    const errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined)
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [FlashnetModule],
+    })
+      .overrideProvider(ConfigService)
+      .useValue(makeConfigService({ FLASHNET_API_KEY: '' }))
+      .compile()
+
+    const resolved = module.get(FLASHNET_SERVICE)
+    expect(resolved).toBeInstanceOf(FlashnetService)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'flashnet.api_key_missing' }),
+      expect.any(String),
+    )
+  })
+
+  it('the mock refuses every webhook signature outside tests', () => {
+    process.env.NODE_ENV = 'production'
+    const mock = new FlashnetMockService()
+    expect(
+      mock.verifyWebhookSignature('{}', 'anything', String(Date.now())),
+    ).toBe(false)
+  })
+
+  it('returns FlashnetMockService when FLASHNET_API_KEY is empty in tests', async () => {
     const module: TestingModule = await Test.createTestingModule({
       imports: [FlashnetModule],
     })
