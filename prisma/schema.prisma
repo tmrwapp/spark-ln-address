@@ -61,6 +61,8 @@ model AuthNonce {
   usedAt       DateTime?
   metadataJson String? // optional JSON metadata from wallet
 
+  // Lets AuthNoncePurgeService find expired rows without a full scan.
+  @@index([expiresAt])
   @@map("auth_nonces")
 }
 

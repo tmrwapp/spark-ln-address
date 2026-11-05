@@ -4,9 +4,10 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 
+/** Delay before the first run after boot. */
+const PURGE_FIRST_RUN_MS = 30 * 1000
 /** How often the purge runs. */
 const PURGE_INTERVAL_MS = 10 * 60 * 1000
 /** Expired nonces are kept this long for debugging, then deleted. */
@@ -25,22 +26,27 @@ const PURGE_MAX_BATCHES = 1000
 export class AuthNoncePurgeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuthNoncePurgeService.name)
   private timer: NodeJS.Timeout | undefined
+  private firstRun: NodeJS.Timeout | undefined
   private running = false
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit(): void {
     if (process.env.NODE_ENV === 'test') {
       return
     }
+    // First run shortly after boot, so frequent restarts never skip it.
+    this.firstRun = setTimeout(() => void this.runSafely(), PURGE_FIRST_RUN_MS)
+    this.firstRun.unref()
     this.timer = setInterval(() => void this.runSafely(), PURGE_INTERVAL_MS)
     this.timer.unref()
   }
 
   onModuleDestroy(): void {
+    if (this.firstRun) {
+      clearTimeout(this.firstRun)
+      this.firstRun = undefined
+    }
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = undefined

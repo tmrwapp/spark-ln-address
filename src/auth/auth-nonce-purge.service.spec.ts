@@ -1,5 +1,4 @@
 import { Logger } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
 import { AuthNoncePurgeService } from './auth-nonce-purge.service'
 
 describe('AuthNoncePurgeService (issue 30)', () => {
@@ -9,14 +8,13 @@ describe('AuthNoncePurgeService (issue 30)', () => {
       deleteMany: jest.fn(),
     },
   }
-  const config = { get: jest.fn() } as unknown as ConfigService
   let service: AuthNoncePurgeService
 
   beforeEach(() => {
     jest.clearAllMocks()
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined)
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
-    service = new AuthNoncePurgeService(prisma as never, config)
+    service = new AuthNoncePurgeService(prisma as never)
   })
 
   afterEach(() => {
@@ -80,6 +78,8 @@ describe('AuthNoncePurgeService (issue 30)', () => {
     try {
       prisma.authNonce.findMany.mockRejectedValue(new Error('db down'))
       service.onModuleInit()
+      await jest.advanceTimersByTimeAsync(30 * 1000)
+      expect(prisma.authNonce.findMany).toHaveBeenCalledTimes(1)
       await jest.advanceTimersByTimeAsync(10 * 60 * 1000)
       expect(prisma.authNonce.findMany).toHaveBeenCalled()
       expect(Logger.prototype.warn).toHaveBeenCalled()

@@ -35,7 +35,10 @@ describe('rate limiting (issue 30)', () => {
     findActiveLightningName: jest.fn(async () => null),
   }
 
-  async function boot(env: Record<string, string> = {}) {
+  async function boot(
+    env: Record<string, string> = {},
+    trustProxy = 'loopback',
+  ) {
     const saved = { ...process.env }
     Object.assign(process.env, env)
     const moduleRef = await Test.createTestingModule({
@@ -64,7 +67,7 @@ describe('rate limiting (issue 30)', () => {
     process.env = saved
 
     const nestApp = moduleRef.createNestApplication<NestExpressApplication>()
-    configureTrustProxy(nestApp, 'loopback')
+    configureTrustProxy(nestApp, trustProxy)
     await nestApp.init()
     return nestApp
   }
@@ -104,7 +107,9 @@ describe('rate limiting (issue 30)', () => {
       status: 'ERROR',
       reason: 'Too many requests, retry later',
     })
-    expect(last.headers['retry-after']).toBeDefined()
+    const retryAfter = Number(last.headers['retry-after'])
+    expect(retryAfter).toBeGreaterThan(0)
+    expect(retryAfter).toBeLessThanOrEqual(60)
   })
 
   it('caps registration attempts on the auth callback', async () => {
@@ -163,6 +168,87 @@ describe('rate limiting (issue 30)', () => {
 
     expect(statuses.slice(0, 3).every((s) => s !== 429)).toBe(true)
     expect(statuses[3]).toBe(429)
+  })
+
+  it('shares one LNURL-pay bucket across case variants of a name', async () => {
+    app = await boot()
+    const { limit } = ROUTE_LIMITS.lnurlCallback
+    const variants = ['alice', 'Alice', 'ALICE', ' alice']
+    const statuses: number[] = []
+    for (let i = 0; i <= limit; i++) {
+      const name = encodeURIComponent(variants[i % variants.length])
+      const res = await request(app.getHttpServer())
+        .get(`/lnurl/callback/${name}?amount=1000`)
+        .set('X-Forwarded-For', '203.0.113.7')
+      statuses.push(res.status)
+    }
+
+    expect(statuses[limit]).toBe(429)
+  })
+
+  it('collapses IPv6 clients to their /64, so address rotation does not reset the limit', async () => {
+    app = await boot()
+    const { limit } = ROUTE_LIMITS.authChallenge
+    const statuses: number[] = []
+    for (let i = 0; i <= limit; i++) {
+      const res = await request(app.getHttpServer())
+        .get('/v1/auth/lnurl')
+        .set('X-Forwarded-For', `2001:db8:1:2::${(i + 1).toString(16)}`)
+      statuses.push(res.status)
+    }
+
+    expect(statuses[limit]).toBe(429)
+  })
+
+  it('counts the global limit across routes, not per route', async () => {
+    app = await boot({ RATE_LIMIT_MAX: '4' })
+
+    await hit('/.well-known/lnurlp/alice', 2)
+    await hit('/v1/auth/lnurl', 2)
+    const { statuses } = await hit('/lnurl/callback/bob?amount=1000', 1)
+
+    expect(statuses[0]).toBe(429)
+  })
+
+  it('ignores X-Forwarded-For from an untrusted peer, so it cannot be spoofed', async () => {
+    app = await boot({}, 'false')
+    const { limit } = ROUTE_LIMITS.authChallenge
+    const statuses: number[] = []
+    for (let i = 0; i <= limit; i++) {
+      const res = await request(app.getHttpServer())
+        .get('/v1/auth/lnurl')
+        .set('X-Forwarded-For', `198.51.100.${i + 1}`)
+      statuses.push(res.status)
+    }
+
+    expect(statuses[limit]).toBe(429)
+  })
+
+  it('refuses TRUST_PROXY=true and falls back to the default', async () => {
+    const error = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined)
+    app = await boot({}, 'true')
+
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'rate_limit.trust_proxy_true_refused' }),
+    )
+    error.mockRestore()
+  })
+
+  it('falls back to the default limit when RATE_LIMIT_MAX is invalid', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined)
+    app = await boot({ RATE_LIMIT_MAX: 'lots' })
+
+    const { statuses } = await hit('/.well-known/lnurlp/alice', 5)
+
+    expect(statuses.every((s) => s !== 429)).toBe(true)
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'rate_limit.invalid_config' }),
+    )
+    warn.mockRestore()
   })
 
   it('never throttles the Flashnet webhook or the health check', async () => {

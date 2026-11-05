@@ -24,7 +24,7 @@ export const ROUTE_THROTTLER = 'route'
 
 /** Defaults for the global per-client throttler. */
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000
-export const DEFAULT_RATE_LIMIT_MAX = 300
+export const DEFAULT_RATE_LIMIT_MAX = 600
 
 /** The per-route throttler is a no-op on routes that do not override it. */
 export const ROUTE_THROTTLER_UNLIMITED = Number.MAX_SAFE_INTEGER

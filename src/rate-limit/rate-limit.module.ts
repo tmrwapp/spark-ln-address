@@ -51,6 +51,9 @@ function positiveInt(raw: unknown, fallback: number, name: string): number {
           throttlers: [
             {
               name: 'default',
+              // One bucket per client across ALL routes (the library default
+              // keys per route), so RATE_LIMIT_MAX is a true global cap.
+              generateKey: (_context, tracker, name) => `${name}-${tracker}`,
               ttl: positiveInt(
                 config.get('RATE_LIMIT_WINDOW_MS'),
                 DEFAULT_RATE_LIMIT_WINDOW_MS,
@@ -85,7 +88,15 @@ export function configureTrustProxy(
   app: NestExpressApplication,
   value: string | undefined,
 ): void {
-  const setting =
+  let setting =
     value === undefined || value === '' ? DEFAULT_TRUST_PROXY : value
-  app.set('trust proxy', setting === 'false' ? false : setting)
+  if (setting.trim().toLowerCase() === 'true') {
+    // Trusting every hop lets any client spoof X-Forwarded-For and pick its
+    // own rate-limit bucket.
+    logger.error({ event: 'rate_limit.trust_proxy_true_refused' })
+    setting = DEFAULT_TRUST_PROXY
+  }
+  const effective = setting === 'false' ? false : setting
+  app.set('trust proxy', effective)
+  logger.log({ event: 'rate_limit.trust_proxy', setting: String(effective) })
 }

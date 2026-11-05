@@ -28,6 +28,7 @@ import {
   ROUTE_LIMITS,
   ROUTE_THROTTLER,
 } from '../rate-limit/rate-limit.constants'
+import { payerAndNameTracker } from '../rate-limit/rate-limit.trackers'
 
 /**
  * Extracts a short reason string from an unknown error for log/response use.
@@ -94,7 +95,7 @@ export class LnurlController {
     [ROUTE_THROTTLER]: {
       ...ROUTE_LIMITS.lnurlCallback,
       // Per payer AND name: a custodial wallet pays many users from one IP.
-      getTracker: (req) => `${req.ip}:${String(req.params?.username ?? '')}`,
+      getTracker: payerAndNameTracker,
     },
   })
   async handleLnurlCallback(
