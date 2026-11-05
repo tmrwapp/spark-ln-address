@@ -69,9 +69,13 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
 - **`amountMsat` is `BigInt`** in Prisma — serialize accordingly.
 - **`AuthNonce`:** 5-minute expiry, single-use (`usedAt`). `Invoice` 24h expiry.
   Cascade deletes from `User`.
-- **Reserved usernames** (`src/config/reserved-usernames.ts`, plus `RESERVED_USERNAMES`): checked on
-  registration and when claiming a new name, compared by skeleton (separators stripped, digit
-  lookalikes folded). Switching back to an owned name skips the check, so old registrations stay valid.
+- **Reserved usernames** (`src/common/reserved-usernames.ts`, plus `RESERVED_USERNAMES`): checked on
+  registration (after the signature) and when claiming a new name. A name is reserved when its
+  skeleton (separators stripped, `rn`/`vv` and digit lookalikes folded, repeats collapsed, edge
+  digits optional) splits entirely into protected words and fillers (`theguap`, `supportteam`).
+  Every group (`BRANDS`, `ROLES`, `STANDALONE`) must be in `DEFAULT_RESERVED_USERNAMES`; the spec
+  iterates each group. Switching back to an owned name skips the check, so old registrations stay
+  valid.
 - **`queryByUsername` uses `contains`,** not exact match — by design but easy to miss
   (`src/query/query.service.ts`).
 - **A user owns many `LightningName` rows, one `active`.** A username change retires the current

@@ -10,7 +10,7 @@ import { LightningName } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { getDomainFromBaseUrl, normalizeUsername } from '../common/utils'
 import { DEFAULT_NEW_NAME_ALLOWANCE } from './username.constants'
-import { isReservedUsername } from '../config/reserved-usernames'
+import { isReservedUsername } from '../common/reserved-usernames'
 import {
   ChangeUsernameResponseDto,
   UsernameInfoResponseDto,

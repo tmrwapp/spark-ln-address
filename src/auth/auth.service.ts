@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { randomBytes } from 'crypto'
 import { equivalentPubKeyForms, verifySignature } from './secp256k1.utils'
-import { isReservedUsername } from '../config/reserved-usernames'
+import { isReservedUsername } from '../common/reserved-usernames'
 
 @Injectable()
 export class AuthService {

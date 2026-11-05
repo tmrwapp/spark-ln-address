@@ -307,7 +307,7 @@ accurately.
 | 200 | — | Name changed or switched back. |
 | 400 | `INVALID_USERNAME` | Fails `^[a-z0-9._-]{1,30}$` in `normalizeUsername`. |
 | 400 | `SAME_USERNAME` | Target equals the currently active name. Rejected rather than treated as a silent no-op, so the client never reports a change that did not happen. |
-| 400 | `USERNAME_RESERVED` | Target is a reserved brand, support or role name, or a lookalike (`src/config/reserved-usernames.ts`, plus `RESERVED_USERNAMES`). Checked only for a name the account does not already own. |
+| 400 | `USERNAME_RESERVED` | Target is a reserved brand, support or role name, or a lookalike (`src/common/reserved-usernames.ts`, plus `RESERVED_USERNAMES`). Checked only for a name the account does not already own. |
 | 401 | — | Guard rejection: missing headers, timestamp skew, bad signature, unknown pubkey, or a replayed request. |
 | 409 | `USERNAME_TAKEN` | The name is active or retired under any account, including a name retired by a different user. |
 | 409 | `CHANGE_LIMIT_REACHED` | The user's ceiling of `2 + bonusUsernameChanges` new names is already spent and the target is not in this user's history. |
