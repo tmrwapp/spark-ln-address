@@ -72,6 +72,11 @@ export class FlashnetService implements OnModuleInit {
     params: LightningQuoteRequest,
     idempotencyKey: string,
   ): Promise<LightningQuoteResponse> {
+    // Fail fast without a key: the LNURL callback falls back to sats at once
+    // instead of waiting for Flashnet's 401 on every payment.
+    if (!this.apiKey) {
+      throw new ServiceUnavailableException('Flashnet API key not configured')
+    }
     const url = `${this.apiBase}/v1/orchestration/quote`
     let response: Response
 

@@ -265,6 +265,25 @@ describe('FlashnetWebhookController', () => {
       configValues = {}
     })
 
+    it.each(['0x10', '1e6', '5m', '-1', '7200000'])(
+      'warns and keeps the default for FLASHNET_WEBHOOK_MAX_SKEW_MS=%s',
+      async (raw) => {
+        const warn = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation(() => undefined)
+        configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: raw }
+        await buildModule()
+        configValues = {}
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'flashnet.webhook_invalid_max_skew',
+          }),
+        )
+        warn.mockRestore()
+      },
+    )
+
     it('warns and keeps the default when FLASHNET_WEBHOOK_MAX_SKEW_MS is invalid', async () => {
       const warn = jest
         .spyOn(Logger.prototype, 'warn')

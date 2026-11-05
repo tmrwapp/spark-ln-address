@@ -18,6 +18,7 @@ import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
 import {
   DEFAULT_WEBHOOK_MAX_SKEW_MS,
+  MAX_WEBHOOK_MAX_SKEW_MS,
   isFreshTimestamp,
 } from './webhook-timestamp'
 
@@ -54,8 +55,10 @@ export class FlashnetWebhookController {
     if (raw === undefined || raw === '') {
       return DEFAULT_WEBHOOK_MAX_SKEW_MS
     }
-    const value = Number(raw)
-    if (!Number.isFinite(value) || value <= 0) {
+    // Plain decimal milliseconds, at most one hour: `5m`, `0x10` or `1e9`
+    // would otherwise disable or distort the freshness check silently.
+    const value = /^\d{1,10}$/.test(raw) ? Number(raw) : NaN
+    if (!(value > 0 && value <= MAX_WEBHOOK_MAX_SKEW_MS)) {
       this.logger.warn({
         event: 'flashnet.webhook_invalid_max_skew',
         fallbackMs: DEFAULT_WEBHOOK_MAX_SKEW_MS,

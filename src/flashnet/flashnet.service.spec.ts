@@ -99,6 +99,26 @@ describe('FlashnetService', () => {
   // -------------------------------------------------------------------------
 
   describe('createLightningQuote', () => {
+    it('fails fast without FLASHNET_API_KEY, never calling Flashnet', async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          FlashnetService,
+          {
+            provide: ConfigService,
+            useValue: makeConfigService({ FLASHNET_API_KEY: '' }),
+          },
+        ],
+      }).compile()
+      const svc = module.get(FlashnetService)
+      const fetchSpy = jest.spyOn(global, 'fetch')
+
+      await expect(
+        svc.createLightningQuote(SAMPLE_REQUEST, 'idem-nokey'),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      fetchSpy.mockRestore()
+    })
+
     it('happy path — returns typed LightningQuoteResponse with replayed: false', async () => {
       fetchSpy = jest
         .spyOn(global, 'fetch')
@@ -576,7 +596,9 @@ describe('FlashnetService', () => {
           {
             provide: ConfigService,
             useValue: {
-              get: jest.fn(() => undefined),
+              get: jest.fn((key: string) =>
+                key === 'FLASHNET_API_KEY' ? 'fn_test_key' : undefined,
+              ),
             },
           },
         ],
