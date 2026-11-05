@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing'
-import { UnauthorizedException } from '@nestjs/common'
+import { Logger, UnauthorizedException } from '@nestjs/common'
 import { FlashnetWebhookController } from './flashnet-webhook.controller'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -273,7 +273,9 @@ describe('FlashnetWebhookController', () => {
 
     it('invalid HMAC with a forged-line timestamp is logged escaped and truncated (issue 34)', async () => {
       await buildModule(false)
-      const warnSpy = jest.spyOn(controller['logger'], 'warn')
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
       const req = makeRequest({
         headers: {
           'x-flashnet-signature': 'sig',

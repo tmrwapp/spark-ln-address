@@ -9,6 +9,7 @@ import {
   Logger,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
+import { LOG_ERROR_MAX_LENGTH, sanitizeForLog } from '../common/log-sanitize'
 import { createId } from '@paralleldrive/cuid2'
 import { LnurlService } from './lnurl.service'
 import { LightsparkService } from '../lightspark/lightspark.service'
@@ -23,7 +24,6 @@ import {
   buildLnurlPayMetadata,
   lnurlPayDescriptionHash,
 } from './lnurl-pay-metadata'
-import { LOG_ERROR_MAX_LENGTH, sanitizeForLog } from '../common/log-sanitize'
 
 /**
  * Extracts a short reason string from an unknown error for log/response use.
