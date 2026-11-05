@@ -224,6 +224,16 @@ describe('rate limiting (issue 30)', () => {
     expect(statuses[limit]).toBe(429)
   })
 
+  it('reads a numeric TRUST_PROXY as a hop count', async () => {
+    app = await boot({}, '1')
+    const { limit } = ROUTE_LIMITS.authChallenge
+    await hit('/v1/auth/lnurl', limit + 1, '203.0.113.7')
+
+    const { statuses } = await hit('/v1/auth/lnurl', 1, '198.51.100.9')
+
+    expect(statuses[0]).toBe(200)
+  })
+
   it('refuses TRUST_PROXY=true and falls back to the default', async () => {
     const error = jest
       .spyOn(Logger.prototype, 'error')

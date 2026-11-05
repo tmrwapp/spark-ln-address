@@ -17,8 +17,8 @@ describe('AuthNoncePurgeService (issue 30)', () => {
     service = new AuthNoncePurgeService(prisma as never)
   })
 
-  afterEach(() => {
-    service.onModuleDestroy()
+  afterEach(async () => {
+    await service.onModuleDestroy()
     jest.restoreAllMocks()
   })
 
@@ -84,7 +84,7 @@ describe('AuthNoncePurgeService (issue 30)', () => {
       expect(prisma.authNonce.findMany).toHaveBeenCalled()
       expect(Logger.prototype.warn).toHaveBeenCalled()
     } finally {
-      service.onModuleDestroy()
+      await service.onModuleDestroy()
       jest.useRealTimers()
       process.env.NODE_ENV = originalEnv
     }

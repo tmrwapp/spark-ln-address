@@ -28,6 +28,7 @@ export class AuthNoncePurgeService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | undefined
   private firstRun: NodeJS.Timeout | undefined
   private running = false
+  private inFlight: Promise<void> | undefined
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -36,13 +37,13 @@ export class AuthNoncePurgeService implements OnModuleInit, OnModuleDestroy {
       return
     }
     // First run shortly after boot, so frequent restarts never skip it.
-    this.firstRun = setTimeout(() => void this.runSafely(), PURGE_FIRST_RUN_MS)
+    this.firstRun = setTimeout(() => this.schedule(), PURGE_FIRST_RUN_MS)
     this.firstRun.unref()
-    this.timer = setInterval(() => void this.runSafely(), PURGE_INTERVAL_MS)
+    this.timer = setInterval(() => this.schedule(), PURGE_INTERVAL_MS)
     this.timer.unref()
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     if (this.firstRun) {
       clearTimeout(this.firstRun)
       this.firstRun = undefined
@@ -51,6 +52,7 @@ export class AuthNoncePurgeService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.timer)
       this.timer = undefined
     }
+    await this.inFlight
   }
 
   /** Deletes nonces that expired before `now - grace`; returns the count. */
@@ -75,6 +77,10 @@ export class AuthNoncePurgeService implements OnModuleInit, OnModuleDestroy {
       }
     }
     return deleted
+  }
+
+  private schedule(): void {
+    this.inFlight = this.runSafely()
   }
 
   private async runSafely(): Promise<void> {

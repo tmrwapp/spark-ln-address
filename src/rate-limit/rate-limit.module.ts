@@ -96,7 +96,14 @@ export function configureTrustProxy(
     logger.error({ event: 'rate_limit.trust_proxy_true_refused' })
     setting = DEFAULT_TRUST_PROXY
   }
-  const effective = setting === 'false' ? false : setting
+  // A plain number is a hop count; Express needs it as a number, since the
+  // string "1" would be read as an address.
+  const effective =
+    setting === 'false'
+      ? false
+      : /^\d+$/.test(setting.trim())
+        ? Number(setting.trim())
+        : setting
   app.set('trust proxy', effective)
   logger.log({ event: 'rate_limit.trust_proxy', setting: String(effective) })
 }

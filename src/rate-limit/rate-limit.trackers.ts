@@ -1,4 +1,5 @@
 import { DEFAULT_IPV6_SUBNET_PREFIX, normalizeIp } from '@nestjs/throttler'
+import { normalizeUsername } from '../common/utils'
 
 /** Longest name segment kept in a tracker key; real names are at most 30. */
 const MAX_NAME_IN_KEY = 32
@@ -10,9 +11,15 @@ const MAX_NAME_IN_KEY = 32
  */
 export function payerAndNameTracker(req: Record<string, any>): string {
   const client = normalizeIp(String(req.ip ?? ''), DEFAULT_IPV6_SUBNET_PREFIX)
-  const name = String(req.params?.username ?? '')
-    .trim()
-    .toLowerCase()
-    .slice(0, MAX_NAME_IN_KEY)
+  const raw = String(req.params?.username ?? '')
+  let name: string
+  try {
+    // The same normalisation the service applies, so every spelling that
+    // reaches one user shares one bucket.
+    name = normalizeUsername(raw)
+  } catch {
+    name = raw.trim().toLowerCase()
+  }
+  name = name.slice(0, MAX_NAME_IN_KEY)
   return `${client}:${name}`
 }
