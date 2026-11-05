@@ -143,15 +143,29 @@ export class AuthService {
       // The check above is advisory: two registrations racing on the same name
       // both pass it and one loses at the unique index. Report the loser as a
       // taken username rather than a 500.
-      if ((error as { code?: unknown })?.code === 'P2002') {
+      const prismaError = error as {
+        code?: unknown
+        meta?: { target?: unknown }
+      }
+      if (prismaError?.code === 'P2002') {
+        // The activePubKey index means this key already holds an active
+        // name; anything else is the username index.
+        const target = String(
+          Array.isArray(prismaError.meta?.target)
+            ? prismaError.meta.target.join(',')
+            : (prismaError.meta?.target ?? ''),
+        )
         throw new BadRequestException({
           status: 'ERROR',
-          reason: 'Username already taken',
+          reason: target.includes('activePubKey')
+            ? 'Key already has a username'
+            : 'Username already taken',
         })
       }
-      // Write conflict or deadlock between concurrent registrations. Nothing
-      // was committed and k1 is still unused, so the wallet may retry.
-      if ((error as { code?: unknown })?.code === 'P2034') {
+      // Write conflict or deadlock (P2034), or a lock wait that outlived the
+      // interactive transaction (P2028), between concurrent registrations.
+      // Nothing was committed and k1 is still unused, so the wallet may retry.
+      if (prismaError?.code === 'P2034' || prismaError?.code === 'P2028') {
         throw new BadRequestException({
           status: 'ERROR',
           reason: 'Registration conflict, please retry',

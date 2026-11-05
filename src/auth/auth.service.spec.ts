@@ -720,6 +720,59 @@ describe('AuthService', () => {
       expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1)
     })
 
+    it.each(['P2028'])(
+      'maps a transaction timeout (%s) to a retryable LNURL error, not a 500',
+      async (code) => {
+        mockPrismaService.$transaction.mockRejectedValue(
+          Object.assign(new Error('Transaction timed out'), { code }),
+        )
+
+        await expect(
+          service.verifyAndBindUsername(k1, sig, key, 'slow'),
+        ).rejects.toMatchObject({
+          response: {
+            status: 'ERROR',
+            reason: 'Registration conflict, please retry',
+          },
+        })
+      },
+    )
+
+    it('reports a key collision on the activePubKey index as such, not as a taken name', async () => {
+      mockPrismaService.lightningName.create.mockRejectedValue(
+        Object.assign(new Error('Unique constraint failed'), {
+          code: 'P2002',
+          meta: { target: 'lightning_names_activePubKey_key' },
+        }),
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'second'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Key already has a username' },
+      })
+    })
+
+    it('consumes k1 through the transaction client, never the outer client', async () => {
+      const tx = {
+        authNonce: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUnique: jest.fn(),
+        },
+        user: { create: jest.fn().mockResolvedValue({ id: 'user-tx' }) },
+        lightningName: { create: jest.fn().mockResolvedValue({}) },
+      }
+      mockPrismaService.$transaction.mockImplementation(
+        async (callback: (t: unknown) => unknown) => callback(tx),
+      )
+
+      await service.verifyAndBindUsername(k1, sig, key, 'txonly')
+
+      expect(tx.authNonce.updateMany).toHaveBeenCalledTimes(1)
+      expect(mockPrismaService.authNonce.updateMany).not.toHaveBeenCalled()
+      expect(mockPrismaService.authNonce.update).not.toHaveBeenCalled()
+    })
+
     it('maps a transaction write conflict to a retryable LNURL error, not a 500', async () => {
       mockPrismaService.$transaction.mockRejectedValue(
         Object.assign(new Error('Write conflict'), { code: 'P2034' }),
