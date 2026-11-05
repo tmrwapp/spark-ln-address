@@ -5,7 +5,7 @@ import { normalizeUsername, getDomainFromBaseUrl } from '../common/utils'
 import { encodeSparkAddress, SparkNetwork } from '../common/spark-address.utils'
 import { UsernameQueryResponseDto } from '../common/username-query-response.dto'
 import { PubKeyQueryResponseDto } from '../common/pubkey-query-response.dto'
-import { sanitizeForLog } from '../common/log-sanitize'
+import { errorForLog, sanitizeForLog } from '../common/log-sanitize'
 
 @Injectable()
 export class QueryService {
@@ -73,7 +73,10 @@ export class QueryService {
         network,
       )
     } catch (error) {
-      this.logger.error(`Error encoding spark address: ${error.message}`)
+      this.logger.error({
+        event: 'query.spark_address_encoding_failed',
+        error: errorForLog(error),
+      })
       // We still return the response but without sparkAddress if it fails for some reason
       // though ideally linkingPubKeyHex is always valid if it's in the DB
     }
@@ -115,7 +118,10 @@ export class QueryService {
             network,
           )
         } catch (error) {
-          this.logger.error(`Error encoding spark address: ${error.message}`)
+          this.logger.error({
+            event: 'query.spark_address_encoding_failed',
+            error: errorForLog(error),
+          })
         }
 
         return {

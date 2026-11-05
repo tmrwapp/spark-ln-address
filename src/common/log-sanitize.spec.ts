@@ -21,6 +21,15 @@ describe('log sanitising (issue 34)', () => {
     expect(out).toContain('10000 chars')
   })
 
+  it('escapes a literal backslash so it cannot imitate an escape', () => {
+    expect(sanitizeForLog('a\\u000ab', 200)).toBe('a\\\\u000ab')
+  })
+
+  it('never splits an escape sequence when truncating', () => {
+    const out = sanitizeForLog('\n'.repeat(40), 5)
+    expect(out).toBe('\\u000a'.repeat(5) + '...[40 chars]')
+  })
+
   it('leaves short printable values untouched', () => {
     expect(sanitizeForLog('alice')).toBe('alice')
   })

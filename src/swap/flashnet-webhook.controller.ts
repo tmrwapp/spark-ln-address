@@ -45,7 +45,7 @@ export class FlashnetWebhookController {
     // Raw body must be present — wired by NestFactory.create({ rawBody: true }).
     const rawBody: Buffer | undefined = (req as Request & { rawBody?: Buffer }).rawBody
     if (!rawBody) {
-      this.logger.error(`raw body missing on ${req.url}`)
+      this.logger.error(`raw body missing on ${sanitizeForLog(req.url, 64)}`)
       // 400 semantics: raw-body wiring is broken — server configuration error.
       throw Object.assign(new Error('Raw body unavailable'), { status: 400 })
     }

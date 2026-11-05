@@ -17,22 +17,30 @@ export const LOG_ERROR_MAX_LENGTH = 200
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
 
 /**
- * Returns `value` as a single printable line: control characters escaped as
- * \uXXXX, then cut to `maxLength` characters with the original length noted.
+ * Returns `value` as a single printable line: cut to `maxLength` characters
+ * (original length noted), then backslashes and control characters escaped.
  */
 export function sanitizeForLog(
   value: unknown,
   maxLength = LOG_VALUE_MAX_LENGTH,
 ): string {
   const text = typeof value === 'string' ? value : String(value)
-  const escaped = text.replace(
-    CONTROL_CHARACTERS,
-    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
-  )
-  if (escaped.length <= maxLength) {
-    return escaped
-  }
-  return `${escaped.slice(0, maxLength)}...[${text.length} chars]`
+  // Cut before escaping, so an escape sequence is never split and the limit
+  // counts input characters. Backslash is escaped too, so a literal
+  // "\u000a" in the input cannot pass for an escaped newline.
+  // Code points, so a surrogate pair is never split; pre-slice bounds the work.
+  const kept = Array.from(text.slice(0, maxLength * 2))
+    .slice(0, maxLength)
+    .join('')
+  const escaped = kept
+    .replace(/\\/g, '\\\\')
+    .replace(
+      CONTROL_CHARACTERS,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    )
+  return kept.length < text.length
+    ? `${escaped}...[${text.length} chars]`
+    : escaped
 }
 
 /** Describes a secret or signature for the logs by its length only. */

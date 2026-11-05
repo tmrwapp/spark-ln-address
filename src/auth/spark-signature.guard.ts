@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import { createHash } from 'crypto'
 import { verifySignature } from './secp256k1.utils'
 import type { Request } from 'express'
+import { sanitizeForLog } from '../common/log-sanitize'
 
 const DEFAULT_MAX_SKEW_MS = 60000
 
@@ -84,7 +85,7 @@ export class SparkSignatureGuard implements CanActivate {
     const parsed = Number(raw)
     if (!Number.isFinite(parsed) || parsed <= 0) {
       this.logger.warn(
-        `AUTH_MAX_SKEW_MS="${raw}" is not a positive number — falling back to ${DEFAULT_MAX_SKEW_MS}ms`,
+        `AUTH_MAX_SKEW_MS="${sanitizeForLog(raw)}" is not a positive number — falling back to ${DEFAULT_MAX_SKEW_MS}ms`,
       )
       this.maxSkewMs = DEFAULT_MAX_SKEW_MS
       return
@@ -204,14 +205,18 @@ export class SparkSignatureGuard implements CanActivate {
     const key = createHash('sha256').update(canonicalMessage).digest('hex')
 
     if (bucket.has(key)) {
-      this.logger.warn(`Replayed request rejected for pubkey ${pubkey}`)
+      this.logger.warn(
+        `Replayed request rejected for pubkey ${sanitizeForLog(pubkey, 16)}`,
+      )
       throw new UnauthorizedException('Replayed request rejected')
     }
 
     // Refusing to remember one more signature would mean not being able to
     // detect its replay, so reject instead. Only this pubkey is affected.
     if (bucket.size >= REPLAY_CACHE_MAX_PER_PUBKEY) {
-      this.logger.warn(`Replay cache full for pubkey ${pubkey}`)
+      this.logger.warn(
+        `Replay cache full for pubkey ${sanitizeForLog(pubkey, 16)}`,
+      )
       throw new UnauthorizedException('Too many signatures in flight')
     }
 
