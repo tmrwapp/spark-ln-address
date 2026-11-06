@@ -30,6 +30,7 @@ describe('AuthService', () => {
     },
     lightningName: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
     },
     user: {
@@ -853,6 +854,113 @@ describe('AuthService', () => {
           'testuser',
         ),
       ).rejects.toThrow(BadRequestException)
+    })
+  })
+
+  describe('registration ownership and reserved names (issue 32)', () => {
+    const k1 = 'c'.repeat(64)
+    let priv: Uint8Array
+    let key: string
+    let sig: string
+
+    beforeEach(() => {
+      priv = new Uint8Array(randomBytes(32))
+      key = Buffer.from(getPublicKey(priv, true)).toString('hex')
+      sig = Buffer.from(sign(Buffer.from(k1, 'hex'), priv)).toString('hex')
+      mockPrismaService.authNonce.findUnique.mockResolvedValue({
+        id: 'nonce-32',
+        k1,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        usedAt: null,
+        metadataJson: null,
+      })
+      mockPrismaService.lightningName.findUnique.mockResolvedValue(null)
+      mockPrismaService.user.create.mockResolvedValue({ id: 'user-32' })
+      mockPrismaService.lightningName.findFirst.mockReset()
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(null)
+      mockPrismaService.lightningName.create.mockResolvedValue({})
+      mockPrismaService.authNonce.update.mockResolvedValue({})
+    })
+
+    it.each(['admin', 'support', 'guap', 'Supp0rt', 'guap.support'])(
+      'refuses to register the reserved name %s',
+      async (name) => {
+        await expect(
+          service.verifyAndBindUsername(k1, sig, key, name),
+        ).rejects.toMatchObject({
+          response: { status: 'ERROR', reason: 'Username is reserved' },
+        })
+        expect(mockPrismaService.user.create).not.toHaveBeenCalled()
+        expect(mockPrismaService.lightningName.create).not.toHaveBeenCalled()
+      },
+    )
+
+    it('refuses a name reserved through RESERVED_USERNAMES', async () => {
+      mockConfigService.get.mockImplementation((k: string) =>
+        k === 'RESERVED_USERNAMES' ? 'acme' : undefined,
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, key, 'acme'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Username is reserved' },
+      })
+      mockConfigService.get.mockReset()
+    })
+
+    it('does not reveal the reserved list before the signature is verified', async () => {
+      const otherKey = Buffer.from(
+        getPublicKey(new Uint8Array(randomBytes(32)), true),
+      ).toString('hex')
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, otherKey, 'admin'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Invalid signature' },
+      })
+    })
+
+    it('refuses a second name for a key already active in its other encoding', async () => {
+      const uncompressed = Buffer.from(getPublicKey(priv, false)).toString(
+        'hex',
+      )
+      mockPrismaService.lightningName.findFirst.mockImplementation(
+        async ({ where }) =>
+          where.activePubKey.in.includes(key) ? { id: 'ln-existing' } : null,
+      )
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, uncompressed, 'second'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Key already has a username' },
+      })
+      expect(mockPrismaService.lightningName.create).not.toHaveBeenCalled()
+    })
+
+    it("refuses to bind a name to someone else's key (and so their Spark address)", async () => {
+      // The attacker signs k1 with their own key but claims the victim's key.
+      const victimKey = Buffer.from(
+        getPublicKey(new Uint8Array(randomBytes(32)), true),
+      ).toString('hex')
+
+      await expect(
+        service.verifyAndBindUsername(k1, sig, victimKey, 'victim'),
+      ).rejects.toMatchObject({
+        response: { status: 'ERROR', reason: 'Invalid signature' },
+      })
+      expect(mockPrismaService.lightningName.create).not.toHaveBeenCalled()
+    })
+
+    it('binds the name to exactly the key that signed k1', async () => {
+      await service.verifyAndBindUsername(k1, sig, key, 'alice')
+
+      expect(mockPrismaService.lightningName.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          username: 'alice',
+          linkingPubKeyHex: key,
+          activePubKey: key,
+        }),
+      })
     })
   })
 })

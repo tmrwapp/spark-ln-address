@@ -162,3 +162,19 @@ export async function verifySignature(
     return false
   }
 }
+
+/**
+ * The compressed and uncompressed hex encodings of `key` (lowercase), so a
+ * lookup can match the key however it was stored. Returns just the input,
+ * lowercased, if it is not a valid point.
+ */
+export async function equivalentPubKeyForms(key: string): Promise<string[]> {
+  const lower = key.toLowerCase()
+  try {
+    const { Point } = await loadSecp256k1()
+    const point = Point.fromHex(lower)
+    return [...new Set([lower, point.toHex(true), point.toHex(false)])]
+  } catch {
+    return [lower]
+  }
+}

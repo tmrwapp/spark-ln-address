@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { normalizeUsername } from '../common/utils'
 import { randomBytes } from 'crypto'
-import { verifySignature } from './secp256k1.utils'
+import { equivalentPubKeyForms, verifySignature } from './secp256k1.utils'
+import { isReservedUsername } from '../common/reserved-usernames'
 
 @Injectable()
 export class AuthService {
@@ -29,6 +30,40 @@ export class AuthService {
     })
 
     return { k1, callback }
+  }
+
+  /**
+   * Brand, support and role names cannot be registered (issue 32). Ownership
+   * itself is proven by the k1 signature: the name is bound to exactly the key
+   * that signed, and the Spark address served for it derives from that key.
+   */
+  private rejectReservedUsername(username: string): void {
+    const extra = this.configService.get<string>('RESERVED_USERNAMES')
+    if (isReservedUsername(username, extra)) {
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Username is reserved',
+      })
+    }
+  }
+
+  /**
+   * One active name per key. The activePubKey unique index compares strings,
+   * so the same key sent in its other encoding (compressed vs uncompressed)
+   * would slip past it and let one key hold several names (issue 32).
+   */
+  private async rejectKeyWithActiveName(key: string): Promise<void> {
+    const forms = await equivalentPubKeyForms(key)
+    const holder = await this.prisma.lightningName.findFirst({
+      where: { activePubKey: { in: forms } },
+      select: { id: true },
+    })
+    if (holder) {
+      throw new BadRequestException({
+        status: 'ERROR',
+        reason: 'Key already has a username',
+      })
+    }
   }
 
   async verifyAndBindUsername(
@@ -85,6 +120,10 @@ export class AuthService {
         reason: 'Invalid signature',
       })
     }
+
+    // After the signature, so an unauthenticated caller cannot probe the list.
+    this.rejectReservedUsername(username)
+    await this.rejectKeyWithActiveName(key)
 
     // Check if username is available. This deliberately does NOT filter on
     // `active`, so a name retired by a username change stays permanently

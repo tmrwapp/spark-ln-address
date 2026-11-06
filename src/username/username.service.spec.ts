@@ -141,6 +141,69 @@ describe('UsernameService', () => {
     })
   })
 
+  describe('changeUsername — reserved names (issue 32)', () => {
+    it('refuses to claim a reserved name', async () => {
+      mockPrismaService.lightningName.findMany.mockResolvedValue([makeRow()])
+
+      await expect(
+        service.changeUsername('user-1', 'support'),
+      ).rejects.toMatchObject({
+        response: { code: 'USERNAME_RESERVED' },
+      })
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a lookalike of a reserved name', async () => {
+      mockPrismaService.lightningName.findMany.mockResolvedValue([makeRow()])
+
+      await expect(
+        service.changeUsername('user-1', 'adm1n'),
+      ).rejects.toMatchObject({ response: { code: 'USERNAME_RESERVED' } })
+    })
+
+    it('answers USERNAME_RESERVED even when the change quota is spent', async () => {
+      mockPrismaService.lightningName.findMany.mockResolvedValue([
+        makeRow(),
+        makeRow({
+          id: 'ln-b',
+          username: 'b',
+          active: false,
+          activePubKey: null,
+        }),
+        makeRow({
+          id: 'ln-c',
+          username: 'c',
+          active: false,
+          activePubKey: null,
+        }),
+      ])
+
+      await expect(
+        service.changeUsername('user-1', 'support'),
+      ).rejects.toMatchObject({ response: { code: 'USERNAME_RESERVED' } })
+    })
+
+    it('still lets a user switch back to a reserved name they already own', async () => {
+      // Registrations made before the list existed stay valid.
+      mockPrismaService.lightningName.findMany.mockResolvedValue([
+        makeRow(),
+        makeRow({
+          id: 'ln-admin',
+          username: 'admin',
+          active: false,
+          activePubKey: null,
+        }),
+      ])
+
+      await expect(
+        service.changeUsername('user-1', 'admin'),
+      ).resolves.toMatchObject({
+        username: 'admin',
+        switchedBack: true,
+      })
+    })
+  })
+
   describe('changeUsername — claiming a new name', () => {
     beforeEach(() => {
       mockPrismaService.lightningName.findMany.mockResolvedValue([makeRow()])

@@ -71,6 +71,13 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
   `updateMany where usedAt IS NULL` inside the registration transaction; never mark it used
   in a separate statement after commit (that was the issue 33 race). `Invoice` 24h expiry.
   Cascade deletes from `User`.
+- **Reserved usernames** (`src/common/reserved-usernames.ts`, plus `RESERVED_USERNAMES`): checked on
+  registration (after the signature) and when claiming a new name. A name is reserved when its
+  skeleton (separators stripped, `rn`/`vv` and digit lookalikes folded, repeats collapsed, edge
+  digits optional) splits entirely into protected words and fillers (`theguap`, `supportteam`).
+  Every group (`BRANDS`, `ROLES`, `STANDALONE`) must be in `DEFAULT_RESERVED_USERNAMES`; the spec
+  iterates each group. Switching back to an owned name skips the check, so old registrations stay
+  valid.
 - **`queryByUsername` uses `contains`,** not exact match — by design but easy to miss
   (`src/query/query.service.ts`).
 - **A user owns many `LightningName` rows, one `active`.** A username change retires the current

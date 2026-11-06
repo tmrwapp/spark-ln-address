@@ -10,6 +10,7 @@ import { LightningName } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { getDomainFromBaseUrl, normalizeUsername } from '../common/utils'
 import { DEFAULT_NEW_NAME_ALLOWANCE } from './username.constants'
+import { isReservedUsername } from '../common/reserved-usernames'
 import {
   ChangeUsernameResponseDto,
   UsernameInfoResponseDto,
@@ -99,6 +100,20 @@ export class UsernameService {
     const owned = rows.find((row) => row.username === username)
 
     if (!owned) {
+      // Reserved names (issue 32) are checked only when claiming a new name, so
+      // switching back to a name the account already owns keeps working.
+      if (
+        isReservedUsername(
+          username,
+          this.configService.get<string>('RESERVED_USERNAMES'),
+        )
+      ) {
+        throw new BadRequestException({
+          code: 'USERNAME_RESERVED',
+          message: 'This username is reserved',
+        })
+      }
+
       if (rows.length - 1 >= changesLimit) {
         throw new ConflictException({
           code: 'CHANGE_LIMIT_REACHED',
