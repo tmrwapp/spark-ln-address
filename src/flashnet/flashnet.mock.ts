@@ -4,10 +4,12 @@ import {
   LightningQuoteResponse,
   OrderStatusResponse,
 } from './flashnet.types'
+import { isTestEnvironment } from './flashnet-environment'
 
 /**
  * Deterministic mock of FlashnetService for test environments.
- * Activated by FlashnetModule factory when FLASHNET_API_KEY is absent.
+ * Activated by FlashnetModule factory when FLASHNET_API_KEY is absent AND
+ * NODE_ENV is 'test'. Never used in development or production.
  */
 @Injectable()
 export class FlashnetMockService {
@@ -67,7 +69,9 @@ export class FlashnetMockService {
     void _rawBody
     void _signature
     void _timestamp
-    return true
+    // Accept-all only under the test runner. FlashnetModule never selects the
+    // mock elsewhere; this is the second line of defence (issue 31).
+    return isTestEnvironment()
   }
 }
 

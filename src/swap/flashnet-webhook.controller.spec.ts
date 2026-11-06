@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing'
 import { Logger, UnauthorizedException } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { FlashnetWebhookController } from './flashnet-webhook.controller'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -32,13 +33,15 @@ function makePrismaMock() {
  * individual header-absent tests can omit specific headers. If not provided,
  * both HMAC headers are present by default.
  */
-function makeRequest(overrides: {
-  rawBody?: Buffer | undefined
-  /** When supplied, completely replaces the default headers (not merged). */
-  headers?: Record<string, string>
-  body?: unknown
-  url?: string
-} = {}) {
+function makeRequest(
+  overrides: {
+    rawBody?: Buffer | undefined
+    /** When supplied, completely replaces the default headers (not merged). */
+    headers?: Record<string, string>
+    body?: unknown
+    url?: string
+  } = {},
+) {
   const defaultPayload: FlashnetWebhookPayload = {
     event: 'order.completed',
     timestamp: '1714000000000',
@@ -51,16 +54,18 @@ function makeRequest(overrides: {
     },
   }
 
-  const rawBody = 'rawBody' in overrides
-    ? overrides.rawBody
-    : Buffer.from(JSON.stringify(defaultPayload), 'utf8')
+  const rawBody =
+    'rawBody' in overrides
+      ? overrides.rawBody
+      : Buffer.from(JSON.stringify(defaultPayload), 'utf8')
 
-  const headers = overrides.headers !== undefined
-    ? overrides.headers
-    : {
-        'x-flashnet-signature': 'valid_sig',
-        'x-flashnet-timestamp': '1714000000000',
-      }
+  const headers =
+    overrides.headers !== undefined
+      ? overrides.headers
+      : {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': String(Date.now()),
+        }
 
   return {
     rawBody,
@@ -79,6 +84,8 @@ describe('FlashnetWebhookController', () => {
   let swapServiceMock: ReturnType<typeof makeSwapServiceMock>
   let flashnetMock: ReturnType<typeof makeFlashnetMock>
 
+  let configValues: Record<string, string> = {}
+
   async function buildModule(verifyResult = true) {
     swapServiceMock = makeSwapServiceMock()
     flashnetMock = makeFlashnetMock(verifyResult)
@@ -89,10 +96,16 @@ describe('FlashnetWebhookController', () => {
         { provide: SwapService, useValue: swapServiceMock },
         { provide: PrismaService, useValue: makePrismaMock() },
         { provide: FLASHNET_SERVICE, useValue: flashnetMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => configValues[key] },
+        },
       ],
     }).compile()
 
-    controller = module.get<FlashnetWebhookController>(FlashnetWebhookController)
+    controller = module.get<FlashnetWebhookController>(
+      FlashnetWebhookController,
+    )
   }
 
   beforeEach(async () => {
@@ -114,12 +127,25 @@ describe('FlashnetWebhookController', () => {
     })
 
     it('stamps header timestamp into parsed payload before dispatch', async () => {
-      const req = makeRequest({ headers: { 'x-flashnet-signature': 'sig', 'x-flashnet-timestamp': '9999999999999' } })
+      const ts = String(Date.now() - 1_000)
+      const req = makeRequest({
+        headers: { 'x-flashnet-signature': 'sig', 'x-flashnet-timestamp': ts },
+      })
 
       await controller.handleWebhook(req)
 
-      const dispatched = swapServiceMock.applyWebhookEvent.mock.calls[0][0] as FlashnetWebhookPayload
-      expect(dispatched.timestamp).toBe('9999999999999')
+      const dispatched = swapServiceMock.applyWebhookEvent.mock
+        .calls[0][0] as FlashnetWebhookPayload
+      expect(dispatched.timestamp).toBe(ts)
+    })
+
+    it('accepts a fresh timestamp expressed in seconds', async () => {
+      const ts = String(Math.floor(Date.now() / 1000))
+      const req = makeRequest({
+        headers: { 'x-flashnet-signature': 'sig', 'x-flashnet-timestamp': ts },
+      })
+
+      await expect(controller.handleWebhook(req)).resolves.toBeUndefined()
     })
   })
 
@@ -134,7 +160,9 @@ describe('FlashnetWebhookController', () => {
         headers: { 'x-flashnet-timestamp': '1714000000000' },
       })
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
       expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
     })
 
@@ -144,14 +172,18 @@ describe('FlashnetWebhookController', () => {
         headers: { 'x-flashnet-signature': 'valid_sig' },
       })
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
       expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
     })
 
     it('both HMAC headers absent → throws UnauthorizedException', async () => {
       const req = makeRequest({ headers: {} })
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
     })
 
     it('invalid HMAC (verifyWebhookSignature returns false) → throws UnauthorizedException', async () => {
@@ -160,7 +192,9 @@ describe('FlashnetWebhookController', () => {
       await buildModule(false /* verifyResult */)
 
       const req = makeRequest()
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
       expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
     })
 
@@ -181,6 +215,111 @@ describe('FlashnetWebhookController', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Timestamp freshness (issue 31)
+  // -------------------------------------------------------------------------
+
+  describe('timestamp freshness', () => {
+    it('replay of a correctly signed event older than 5 minutes → 401, not dispatched', async () => {
+      const stale = String(Date.now() - 5 * 60 * 1000 - 1_000)
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': stale,
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
+      expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
+    })
+
+    it('timestamp more than 5 minutes in the future → 401', async () => {
+      const future = String(Date.now() + 5 * 60 * 1000 + 1_000)
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': future,
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
+      expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
+    })
+
+    it('honours a custom FLASHNET_WEBHOOK_MAX_SKEW_MS', async () => {
+      configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: '1000' }
+      await buildModule()
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': String(Date.now() - 5_000),
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
+      configValues = {}
+    })
+
+    it.each(['0x10', '1e6', '5m', '-1', '7200000'])(
+      'warns and keeps the default for FLASHNET_WEBHOOK_MAX_SKEW_MS=%s',
+      async (raw) => {
+        const warn = jest
+          .spyOn(Logger.prototype, 'warn')
+          .mockImplementation(() => undefined)
+        configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: raw }
+        await buildModule()
+        configValues = {}
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'flashnet.webhook_invalid_max_skew',
+          }),
+        )
+        warn.mockRestore()
+      },
+    )
+
+    it('warns and keeps the default when FLASHNET_WEBHOOK_MAX_SKEW_MS is invalid', async () => {
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
+      configValues = { FLASHNET_WEBHOOK_MAX_SKEW_MS: 'soon' }
+      await buildModule()
+      configValues = {}
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'flashnet.webhook_invalid_max_skew' }),
+      )
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': String(Date.now() - 60_000),
+        },
+      })
+      await expect(controller.handleWebhook(req)).resolves.toBeUndefined()
+    })
+
+    it('non-numeric timestamp → 401', async () => {
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'valid_sig',
+          'x-flashnet-timestamp': 'yesterday',
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
+      expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // Missing rawBody — concern #3
   // -------------------------------------------------------------------------
 
@@ -193,7 +332,9 @@ describe('FlashnetWebhookController', () => {
       // Do NOT fix here — flagged for QA adjudication.
       const req = makeRequest({ rawBody: undefined })
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow('Raw body unavailable')
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        'Raw body unavailable',
+      )
       expect(swapServiceMock.applyWebhookEvent).not.toHaveBeenCalled()
     })
 
@@ -256,9 +397,13 @@ describe('FlashnetWebhookController', () => {
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
       const req = makeRequest({ headers: {} })
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('missing HMAC headers'))
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('missing HMAC headers'),
+      )
     })
 
     it('invalid HMAC → warn with invalid-signature summary', async () => {
@@ -266,9 +411,13 @@ describe('FlashnetWebhookController', () => {
       const warnSpy = jest.spyOn(controller['logger'], 'warn')
       const req = makeRequest()
 
-      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+      await expect(controller.handleWebhook(req)).rejects.toThrow(
+        UnauthorizedException,
+      )
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid HMAC signature'))
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('invalid HMAC signature'),
+      )
     })
   })
 })

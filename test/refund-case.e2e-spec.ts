@@ -57,8 +57,7 @@ describe('RefundCase webhook integration (e2e)', () => {
     amountMsat?: bigint
   }) {
     const username = `e2e_${randomBytes(4).toString('hex')}`
-    const linkingPubKeyHex =
-      '02' + randomBytes(32).toString('hex') // 33-byte compressed pubkey
+    const linkingPubKeyHex = '02' + randomBytes(32).toString('hex') // 33-byte compressed pubkey
     const user = await prisma.user.create({ data: {} })
     const ln = await prisma.lightningName.create({
       data: {
@@ -110,6 +109,15 @@ describe('RefundCase webhook integration (e2e)', () => {
    * POSTs a webhook to the controller. Uses synthetic header values; with
    * FlashnetMockService active, HMAC verification short-circuits to true.
    */
+  /**
+   * A timestamp inside the webhook freshness window (issue 31). Distinct per
+   * `n` because it is also part of the dedupe key.
+   */
+  const baseNow = Date.now()
+  function freshTimestamp(n: number): string {
+    return String(baseNow - n * 1_000)
+  }
+
   function postWebhook(payload: object, timestamp = String(Date.now())) {
     return request(app.getHttpServer())
       .post('/v1/internal/flashnet/webhook')
@@ -133,13 +141,15 @@ describe('RefundCase webhook integration (e2e)', () => {
         event: 'order.failed',
         error: { code: 'delivery_aborted', message: 'destination unreachable' },
       }),
-      '1714000001000',
+      freshTimestamp(1),
     ).expect(204)
 
     const order = await prisma.flashnetOrder.findFirst({ where: { orderId } })
     expect(order!.status).toBe('FAILED')
 
-    const refundCases = await prisma.refundCase.findMany({ where: { invoiceId } })
+    const refundCases = await prisma.refundCase.findMany({
+      where: { invoiceId },
+    })
     expect(refundCases).toHaveLength(1)
     expect(refundCases[0]).toMatchObject({
       invoiceId,
@@ -156,13 +166,15 @@ describe('RefundCase webhook integration (e2e)', () => {
 
     await postWebhook(
       buildPayload({ orderId, event: 'order.failed' }),
-      '1714000002000',
+      freshTimestamp(2),
     ).expect(204)
 
     const order = await prisma.flashnetOrder.findFirst({ where: { orderId } })
     expect(order!.status).toBe('FAILED')
 
-    const refundCases = await prisma.refundCase.findMany({ where: { invoiceId } })
+    const refundCases = await prisma.refundCase.findMany({
+      where: { invoiceId },
+    })
     expect(refundCases).toHaveLength(0)
   })
 
@@ -177,13 +189,15 @@ describe('RefundCase webhook integration (e2e)', () => {
         event: 'order.completed',
         amountOut: '1000000',
       }),
-      '1714000003000',
+      freshTimestamp(3),
     ).expect(204)
 
     const order = await prisma.flashnetOrder.findFirst({ where: { orderId } })
     expect(order!.status).toBe('DELIVERED')
 
-    const refundCases = await prisma.refundCase.findMany({ where: { invoiceId } })
+    const refundCases = await prisma.refundCase.findMany({
+      where: { invoiceId },
+    })
     expect(refundCases).toHaveLength(0)
   })
 
@@ -197,14 +211,16 @@ describe('RefundCase webhook integration (e2e)', () => {
       event: 'order.failed',
       error: { code: 'delivery_aborted', message: 'sim' },
     })
-    const ts = '1714000004000'
+    const ts = freshTimestamp(4)
 
     // First delivery: opens the case.
     await postWebhook(payload, ts).expect(204)
     // Replay (Flashnet at-least-once): webhook event row dedupes by (orderId, event, timestamp).
     await postWebhook(payload, ts).expect(204)
 
-    const refundCases = await prisma.refundCase.findMany({ where: { invoiceId } })
+    const refundCases = await prisma.refundCase.findMany({
+      where: { invoiceId },
+    })
     expect(refundCases).toHaveLength(1)
   })
 
@@ -223,7 +239,7 @@ describe('RefundCase webhook integration (e2e)', () => {
         event: 'order.failed',
         error: { code: 'delivery_aborted', message: 'sim' },
       }),
-      '1714000005000',
+      freshTimestamp(5),
     ).expect(204)
 
     const res = await request(app.getHttpServer())

@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   Injectable,
   Logger,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
@@ -15,13 +16,16 @@ import {
 } from './flashnet.types'
 import { validateLightningQuote } from './lightning-quote-validation'
 
+const MISSING_SECRET_LOG_INTERVAL_MS = 60_000
+
 @Injectable()
-export class FlashnetService {
+export class FlashnetService implements OnModuleInit {
   private readonly logger = new Logger(FlashnetService.name)
 
   private readonly apiBase: string
   private readonly apiKey: string
   private readonly webhookSecret: string
+  private lastMissingSecretLogAt = Number.NEGATIVE_INFINITY
 
   constructor(private readonly config: ConfigService) {
     this.apiBase =
@@ -33,6 +37,33 @@ export class FlashnetService {
   }
 
   /**
+   * Boot-time warning. The service still starts, because the Lightning
+   * address endpoints do not need the webhook, but every webhook is rejected
+   * until the secret is set (see verifyWebhookSignature).
+   */
+  onModuleInit(): void {
+    if (!this.webhookSecret) {
+      this.logMissingSecret()
+    }
+  }
+
+  /**
+   * Logged at most once a minute: an unauthenticated caller must not be able
+   * to flood the error log by posting webhooks.
+   */
+  private logMissingSecret(): void {
+    const now = Date.now()
+    if (now - this.lastMissingSecretLogAt < MISSING_SECRET_LOG_INTERVAL_MS) {
+      return
+    }
+    this.lastMissingSecretLogAt = now
+    this.logger.error(
+      { event: 'flashnet.webhook_secret_missing' },
+      'FLASHNET_WEBHOOK_SECRET is not set: every Flashnet webhook is REJECTED until it is configured',
+    )
+  }
+
+  /**
    * POST /v1/orchestration/quote
    * Creates a Lightning-funded USDB quote. The order exists only after the LN
    * payment, swaps BTC→USDB, and delivers to recipientAddress.
@@ -41,6 +72,11 @@ export class FlashnetService {
     params: LightningQuoteRequest,
     idempotencyKey: string,
   ): Promise<LightningQuoteResponse> {
+    // Fail fast without a key: the LNURL callback falls back to sats at once
+    // instead of waiting for Flashnet's 401 on every payment.
+    if (!this.apiKey) {
+      throw new ServiceUnavailableException('Flashnet API key not configured')
+    }
     const url = `${this.apiBase}/v1/orchestration/quote`
     let response: Response
 
@@ -179,12 +215,19 @@ export class FlashnetService {
    *
    * Uses crypto.timingSafeEqual for constant-time comparison to prevent timing
    * attacks. Returns false (not throw) if lengths differ.
+   *
+   * Fails closed: with no secret configured every signature is rejected,
+   * since an HMAC keyed with the empty string is computable by anyone.
    */
   verifyWebhookSignature(
     rawBody: Buffer | string,
     signature: string,
     timestamp: string,
   ): boolean {
+    if (!this.webhookSecret) {
+      this.logMissingSecret()
+      return false
+    }
     try {
       const bodyStr =
         rawBody instanceof Buffer ? rawBody.toString('utf8') : rawBody
@@ -193,8 +236,12 @@ export class FlashnetService {
         .update(payload)
         .digest('hex')
 
-      const expectedBuf = Buffer.from(expected, 'utf8')
-      const receivedBuf = Buffer.from(signature, 'utf8')
+      // Compare the raw 32-byte digests; anything but 64 hex chars is refused.
+      if (!/^[0-9a-fA-F]{64}$/.test(signature)) {
+        return false
+      }
+      const expectedBuf = Buffer.from(expected, 'hex')
+      const receivedBuf = Buffer.from(signature, 'hex')
 
       // timingSafeEqual throws if lengths differ — guard explicitly.
       if (expectedBuf.length !== receivedBuf.length) {

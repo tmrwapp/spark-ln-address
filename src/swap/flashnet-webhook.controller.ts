@@ -9,12 +9,18 @@ import {
   UnauthorizedException,
 } from '@nestjs/common'
 import { Request } from 'express'
+import { ConfigService } from '@nestjs/config'
 import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { FlashnetService } from '../flashnet/flashnet.service'
 import { FlashnetMockService } from '../flashnet/flashnet.mock'
 import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  DEFAULT_WEBHOOK_MAX_SKEW_MS,
+  MAX_WEBHOOK_MAX_SKEW_MS,
+  isFreshTimestamp,
+} from './webhook-timestamp'
 
 /**
  * Webhook receiver for Flashnet order lifecycle events.
@@ -31,18 +37,43 @@ import { PrismaService } from '../prisma/prisma.service'
 export class FlashnetWebhookController {
   private readonly logger = new Logger(FlashnetWebhookController.name)
 
+  private readonly maxSkewMs: number
+
   constructor(
     private readonly swapService: SwapService,
     private readonly prisma: PrismaService,
     @Inject(FLASHNET_SERVICE)
     private readonly flashnet: FlashnetService | FlashnetMockService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.maxSkewMs = this.readMaxSkewMs(
+      config.get<string>('FLASHNET_WEBHOOK_MAX_SKEW_MS'),
+    )
+  }
+
+  private readMaxSkewMs(raw: string | undefined): number {
+    if (raw === undefined || raw === '') {
+      return DEFAULT_WEBHOOK_MAX_SKEW_MS
+    }
+    // Plain decimal milliseconds, at most one hour: `5m`, `0x10` or `1e9`
+    // would otherwise disable or distort the freshness check silently.
+    const value = /^\d{1,10}$/.test(raw) ? Number(raw) : NaN
+    if (!(value > 0 && value <= MAX_WEBHOOK_MAX_SKEW_MS)) {
+      this.logger.warn({
+        event: 'flashnet.webhook_invalid_max_skew',
+        fallbackMs: DEFAULT_WEBHOOK_MAX_SKEW_MS,
+      })
+      return DEFAULT_WEBHOOK_MAX_SKEW_MS
+    }
+    return value
+  }
 
   @Post('webhook')
   @HttpCode(HttpStatus.NO_CONTENT)
   async handleWebhook(@Req() req: Request): Promise<void> {
     // Raw body must be present — wired by NestFactory.create({ rawBody: true }).
-    const rawBody: Buffer | undefined = (req as Request & { rawBody?: Buffer }).rawBody
+    const rawBody: Buffer | undefined = (req as Request & { rawBody?: Buffer })
+      .rawBody
     if (!rawBody) {
       this.logger.error(`raw body missing on ${req.url}`)
       // 400 semantics: raw-body wiring is broken — server configuration error.
@@ -59,8 +90,25 @@ export class FlashnetWebhookController {
       throw new UnauthorizedException('Missing HMAC signature headers')
     }
 
+    // Freshness: a captured, correctly signed event cannot be replayed after
+    // the window closes (issue 31). Inside the window an exact replay is a
+    // no-op through SwapService.applyWebhookEvent's dedupe on
+    // (orderId, event, timestamp); the HMAC covers the timestamp, so it cannot
+    // be changed to dodge that key.
+    if (!isFreshTimestamp(timestamp, Date.now(), this.maxSkewMs)) {
+      this.logger.warn({
+        event: 'flashnet.webhook_stale_timestamp',
+        timestampLength: timestamp.length,
+      })
+      throw new UnauthorizedException('Webhook timestamp out of range')
+    }
+
     // HMAC verification — constant-time comparison inside FlashnetService.
-    const valid = this.flashnet.verifyWebhookSignature(rawBody, signature, timestamp)
+    const valid = this.flashnet.verifyWebhookSignature(
+      rawBody,
+      signature,
+      timestamp,
+    )
     if (!valid) {
       this.logger.warn(`invalid HMAC signature (ts=${timestamp})`)
       throw new UnauthorizedException('Invalid webhook signature')
