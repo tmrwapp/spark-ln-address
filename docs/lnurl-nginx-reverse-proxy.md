@@ -30,3 +30,20 @@ The important LNURL endpoint is:
 - `GET /.well-known/lnurlp/:username` → handled by `LnurlController` in `src/lnurl/lnurl.controller.ts`
 
 NGINX must expose this path on your public domain and forward it to the NestJS app.
+
+## Client IP for rate limiting
+
+The app rate-limits per client IP (issue 30) and reads it from `X-Forwarded-For`, trusting only
+the proxies matched by `TRUST_PROXY` (default: loopback only). NGINX must send it:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Real-IP $remote_addr;
+```
+
+Without it every request carries NGINX's address and all clients share one bucket.
+
+Checklist before enabling rate limiting:
+- NGINX runs on the same host (default), or `TRUST_PROXY` names its address or hop count.
+- Port 3003 is reachable only from NGINX (bind or firewall): any host that `TRUST_PROXY` trusts can set its own client IP.
+- A cloud load balancer or CDN in front of NGINX is added to `TRUST_PROXY`; otherwise all clients share its bucket and one abuser throttles everyone.

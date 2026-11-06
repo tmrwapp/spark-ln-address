@@ -60,7 +60,11 @@ Required in production for the USDB route and its webhook:
 
 Optional:
 - `PORT` (default 3003)
-- `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`
+- `RATE_LIMIT_WINDOW_MS` (default 60000), `RATE_LIMIT_MAX` (default 600): one per-client budget shared by every route (IPv6 counted per /64), except `/health` and the Flashnet webhook. Stricter per-route limits (per minute): `GET /v1/auth/lnurl` 30, `GET /v1/auth/lnurl/callback` 30, `GET /lnurl/callback/:username` 30 per client and name (case-insensitive), `PATCH /v1/users/me/username` 10. Over the limit the response is HTTP 429 with `{ status: 'ERROR', reason: 'Too many requests, retry later' }` and `Retry-After`.
+- `RATE_LIMIT_ENABLED` (default true): `false` switches rate limiting off.
+- `TRUST_PROXY` (default `loopback`): Express `trust proxy` (an address list or a hop count; `true` is refused). The proxy in front must send `X-Forwarded-For`, and port 3003 must be reachable only from that proxy. Behind a load balancer or CDN with a public address, add its ranges here, or all clients share one bucket.
+
+Expired LNURL-auth nonces are deleted 30 s after boot and then every 10 minutes, one hour after they expire (index on `auth_nonces.expiresAt`, migration `20261105120000_auth_nonce_expires_at_index`). `TRUST_PROXY=true` is refused, since it would let any client spoof `X-Forwarded-For`.
 
 ## Run locally
 

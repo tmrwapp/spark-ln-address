@@ -8,6 +8,11 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { User } from '@prisma/client'
+import { Throttle } from '@nestjs/throttler'
+import {
+  ROUTE_LIMITS,
+  ROUTE_THROTTLER,
+} from '../rate-limit/rate-limit.constants'
 import { AuthUser } from '../auth/auth-user.decorator'
 import { SparkSignatureGuard } from '../auth/spark-signature.guard'
 import { UsernameService } from './username.service'
@@ -32,6 +37,7 @@ export class UsernameController {
   }
 
   @Patch()
+  @Throttle({ [ROUTE_THROTTLER]: ROUTE_LIMITS.usernameChange })
   @UsePipes(
     new ValidationPipe({
       transform: true,

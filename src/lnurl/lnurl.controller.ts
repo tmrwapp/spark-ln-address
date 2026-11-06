@@ -24,6 +24,12 @@ import {
   buildLnurlPayMetadata,
   lnurlPayDescriptionHash,
 } from './lnurl-pay-metadata'
+import { Throttle } from '@nestjs/throttler'
+import {
+  ROUTE_LIMITS,
+  ROUTE_THROTTLER,
+} from '../rate-limit/rate-limit.constants'
+import { payerAndNameTracker } from '../rate-limit/rate-limit.trackers'
 
 /**
  * Extracts a short reason string from an unknown error for log/response use.
@@ -86,6 +92,13 @@ export class LnurlController {
   }
 
   @Get('lnurl/callback/:username')
+  @Throttle({
+    [ROUTE_THROTTLER]: {
+      ...ROUTE_LIMITS.lnurlCallback,
+      // Per payer AND name: a custodial wallet pays many users from one IP.
+      getTracker: payerAndNameTracker,
+    },
+  })
   async handleLnurlCallback(
     @Param('username') rawUsername: string,
     // A `comment` query parameter (LUD-12) is ignored: none is advertised.
