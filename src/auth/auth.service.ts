@@ -100,10 +100,30 @@ export class AuthService {
       })
     }
 
-    // Create user and bind username. Both in one transaction so a losing race
-    // on the username does not leave an orphaned User row behind.
+    // Consume k1, create the user and bind the username in one transaction.
+    // The nonce read above only produces friendly error reasons; this
+    // conditional update is the real single-use gate. Under concurrency the
+    // second request blocks on the row lock, then re-reads usedAt as set and
+    // changes zero rows, so exactly one request per k1 can succeed. A failure
+    // later in the transaction (a taken name) rolls the consume back, so the
+    // wallet may retry the same k1 with another name, as before.
     try {
       await this.prisma.$transaction(async (tx) => {
+        const now = new Date()
+        const consumed = await tx.authNonce.updateMany({
+          where: { k1, usedAt: null, expiresAt: { gt: now } },
+          data: { usedAt: now },
+        })
+        if (consumed.count !== 1) {
+          // Lost the race, or k1 expired since the read above: say which.
+          const current = await tx.authNonce.findUnique({ where: { k1 } })
+          const expired = !current?.usedAt && current?.expiresAt <= now
+          throw new BadRequestException({
+            status: 'ERROR',
+            reason: expired ? 'k1 expired' : 'k1 already used',
+          })
+        }
+
         const user = await tx.user.create({
           data: {},
         })
@@ -123,20 +143,36 @@ export class AuthService {
       // The check above is advisory: two registrations racing on the same name
       // both pass it and one loses at the unique index. Report the loser as a
       // taken username rather than a 500.
-      if ((error as { code?: unknown })?.code === 'P2002') {
+      const prismaError = error as {
+        code?: unknown
+        meta?: { target?: unknown }
+      }
+      if (prismaError?.code === 'P2002') {
+        // The activePubKey index means this key already holds an active
+        // name; anything else is the username index.
+        const target = String(
+          Array.isArray(prismaError.meta?.target)
+            ? prismaError.meta.target.join(',')
+            : (prismaError.meta?.target ?? ''),
+        )
         throw new BadRequestException({
           status: 'ERROR',
-          reason: 'Username already taken',
+          reason: target.includes('activePubKey')
+            ? 'Key already has a username'
+            : 'Username already taken',
+        })
+      }
+      // Write conflict or deadlock (P2034), or a lock wait that outlived the
+      // interactive transaction (P2028), between concurrent registrations.
+      // Nothing was committed and k1 is still unused, so the wallet may retry.
+      if (prismaError?.code === 'P2034' || prismaError?.code === 'P2028') {
+        throw new BadRequestException({
+          status: 'ERROR',
+          reason: 'Registration conflict, please retry',
         })
       }
       throw error
     }
-
-    // Mark nonce as used
-    await this.prisma.authNonce.update({
-      where: { k1 },
-      data: { usedAt: new Date() },
-    })
 
     return { status: 'OK' }
   }

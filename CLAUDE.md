@@ -67,7 +67,9 @@ docs/username-change.md  spec: rules, data model, migration and rollout for user
   `SparkWallet.initialize(...)` is not awaited in the constructor; `createInvoice` throws
   `'Spark wallet not initialized'` if called before the promise resolves.
 - **`amountMsat` is `BigInt`** in Prisma — serialize accordingly.
-- **`AuthNonce`:** 5-minute expiry, single-use (`usedAt`). `Invoice` 24h expiry.
+- **`AuthNonce`:** 5-minute expiry, single-use (`usedAt`). k1 is consumed by a conditional
+  `updateMany where usedAt IS NULL` inside the registration transaction; never mark it used
+  in a separate statement after commit (that was the issue 33 race). `Invoice` 24h expiry.
   Cascade deletes from `User`.
 - **`queryByUsername` uses `contains`,** not exact match — by design but easy to miss
   (`src/query/query.service.ts`).
