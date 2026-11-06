@@ -14,6 +14,7 @@ import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { FlashnetService } from '../flashnet/flashnet.service'
 import { FlashnetMockService } from '../flashnet/flashnet.mock'
 import { FlashnetWebhookPayload } from '../flashnet/flashnet.types'
+import { errorForLog, sanitizeForLog } from '../common/log-sanitize'
 import { SwapService } from './swap.service'
 import { PrismaService } from '../prisma/prisma.service'
 import {
@@ -75,7 +76,7 @@ export class FlashnetWebhookController {
     const rawBody: Buffer | undefined = (req as Request & { rawBody?: Buffer })
       .rawBody
     if (!rawBody) {
-      this.logger.error(`raw body missing on ${req.url}`)
+      this.logger.error(`raw body missing on ${sanitizeForLog(req.url, 64)}`)
       // 400 semantics: raw-body wiring is broken — server configuration error.
       throw Object.assign(new Error('Raw body unavailable'), { status: 400 })
     }
@@ -110,7 +111,7 @@ export class FlashnetWebhookController {
       timestamp,
     )
     if (!valid) {
-      this.logger.warn(`invalid HMAC signature (ts=${timestamp})`)
+      this.logger.warn(`invalid HMAC signature (ts=${sanitizeForLog(timestamp, 16)})`)
       throw new UnauthorizedException('Invalid webhook signature')
     }
 
@@ -119,7 +120,7 @@ export class FlashnetWebhookController {
     try {
       payload = JSON.parse(rawBody.toString('utf8')) as FlashnetWebhookPayload
     } catch (err) {
-      this.logger.warn(`webhook body parse error: ${String(err)}`)
+      this.logger.warn(`webhook body parse error: ${errorForLog(err)}`)
       // Malformed JSON after valid HMAC — unusual; return 204 to stop retries.
       return
     }

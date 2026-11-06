@@ -5,6 +5,12 @@ import { normalizeUsername, getDomainFromBaseUrl } from '../common/utils'
 import { encodeSparkAddress, SparkNetwork } from '../common/spark-address.utils'
 import { UsernameQueryResponseDto } from '../common/username-query-response.dto'
 import { PubKeyQueryResponseDto } from '../common/pubkey-query-response.dto'
+import {
+  LOG_PUBKEY_MAX_LENGTH,
+  errorForLog,
+  logLine,
+  sanitizeForLog,
+} from '../common/log-sanitize'
 
 @Injectable()
 export class QueryService {
@@ -39,8 +45,15 @@ export class QueryService {
     })
   }
 
-  async queryByPubKey(pubKey: string): Promise<UsernameQueryResponseDto | null> {
-    this.logger.log(`Querying by pubKey: [${pubKey}]`)
+  async queryByPubKey(
+    pubKey: string,
+  ): Promise<UsernameQueryResponseDto | null> {
+    this.logger.log(
+      logLine({
+        event: 'query.by_pubkey',
+        pubKey: sanitizeForLog(pubKey, LOG_PUBKEY_MAX_LENGTH),
+      }),
+    )
     const lightningName = await this.findLightningNameByPubKey(pubKey)
     if (!lightningName) {
       return null
@@ -57,13 +70,22 @@ export class QueryService {
     // Construct Spark Address
     // Note: In a real scenario, we might want to fetch the network from config
     // LightsparkService uses 'MAINNET' by default.
-    const network = (this.configService.get<string>('SPARK_NETWORK') || 'MAINNET') as SparkNetwork
+    const network = (this.configService.get<string>('SPARK_NETWORK') ||
+      'MAINNET') as SparkNetwork
 
     let sparkAddress = ''
     try {
-      sparkAddress = await encodeSparkAddress(lightningName.linkingPubKeyHex, network)
+      sparkAddress = await encodeSparkAddress(
+        lightningName.linkingPubKeyHex,
+        network,
+      )
     } catch (error) {
-      this.logger.error(`Error encoding spark address: ${error.message}`)
+      this.logger.error(
+        logLine({
+          event: 'query.spark_address_encoding_failed',
+          error: errorForLog(error),
+        }),
+      )
       // We still return the response but without sparkAddress if it fails for some reason
       // though ideally linkingPubKeyHex is always valid if it's in the DB
     }
@@ -77,7 +99,12 @@ export class QueryService {
   }
 
   async queryByUsername(username: string): Promise<PubKeyQueryResponseDto[]> {
-    this.logger.log(`Querying by username: [${username}]`)
+    this.logger.log(
+      logLine({
+        event: 'query.by_username',
+        username: sanitizeForLog(username),
+      }),
+    )
     const lightningNames = await this.findLightningNameByUsername(username)
     if (!lightningNames.length) {
       return []
@@ -89,16 +116,25 @@ export class QueryService {
     }
 
     const domain = getDomainFromBaseUrl(publicBaseUrl)
-    const network = (this.configService.get<string>('SPARK_NETWORK') || 'MAINNET') as SparkNetwork
+    const network = (this.configService.get<string>('SPARK_NETWORK') ||
+      'MAINNET') as SparkNetwork
 
     const results = await Promise.all(
       lightningNames.map(async (lightningName) => {
         const lightningAddress = `${lightningName.username}@${domain}`
         let sparkAddress = ''
         try {
-          sparkAddress = await encodeSparkAddress(lightningName.linkingPubKeyHex, network)
+          sparkAddress = await encodeSparkAddress(
+            lightningName.linkingPubKeyHex,
+            network,
+          )
         } catch (error) {
-          this.logger.error(`Error encoding spark address: ${error.message}`)
+          this.logger.error(
+            logLine({
+              event: 'query.spark_address_encoding_failed',
+              error: errorForLog(error),
+            }),
+          )
         }
 
         return {

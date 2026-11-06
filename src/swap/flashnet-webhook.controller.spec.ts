@@ -419,5 +419,25 @@ describe('FlashnetWebhookController', () => {
         expect.stringContaining('invalid HMAC signature'),
       )
     })
+
+    it('invalid HMAC with a forged-line timestamp is logged escaped and truncated (issue 34)', async () => {
+      await buildModule(false)
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined)
+      const req = makeRequest({
+        headers: {
+          'x-flashnet-signature': 'sig',
+          'x-flashnet-timestamp': '1\n[Nest] LOG [SwapService] forged' + '9'.repeat(5_000),
+        },
+      })
+
+      await expect(controller.handleWebhook(req)).rejects.toThrow(UnauthorizedException)
+
+      const text = warnSpy.mock.calls.flat().map(String).join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text).not.toContain('forged')
+      expect(text.length).toBeLessThan(400)
+    })
   })
 })

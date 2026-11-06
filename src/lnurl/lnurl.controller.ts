@@ -9,6 +9,7 @@ import {
   Logger,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
+import { LOG_ERROR_MAX_LENGTH, sanitizeForLog } from '../common/log-sanitize'
 import { createId } from '@paralleldrive/cuid2'
 import { LnurlService } from './lnurl.service'
 import { LightsparkService } from '../lightspark/lightspark.service'
@@ -128,7 +129,7 @@ export class LnurlController {
     } catch (err: any) {
       // The detail names server configuration: log it, keep it off the wire.
       this.logger.error(
-        `[${lightningName.username}] description hash unavailable: ${extractErrorReason(err)}`,
+        `[${lightningName.username}] description hash unavailable: ${sanitizeForLog(extractErrorReason(err), LOG_ERROR_MAX_LENGTH)}`,
       )
       return { status: 'ERROR', reason: 'Service unavailable' }
     }
@@ -157,7 +158,7 @@ export class LnurlController {
       } catch (err: any) {
         const reason = extractErrorReason(err)
         this.logger.warn(
-          `[${lightningName.username}] usdb unavailable (${reason}), using sats`,
+          `[${lightningName.username}] usdb unavailable (${sanitizeForLog(reason, LOG_ERROR_MAX_LENGTH)}), using sats`,
         )
       }
     }
@@ -175,7 +176,7 @@ export class LnurlController {
     } catch (err: any) {
       const reason = extractErrorReason(err)
       this.logger.error(
-        `[${lightningName.username}] sats issuance failed: ${reason}`,
+        `[${lightningName.username}] sats issuance failed: ${sanitizeForLog(reason, LOG_ERROR_MAX_LENGTH)}`,
       )
       return { status: 'ERROR', reason }
     }

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import { sanitizeForLog } from '../common/log-sanitize'
 import { FLASHNET_SERVICE } from '../flashnet/flashnet.module'
 import { FlashnetService } from '../flashnet/flashnet.service'
 import { FlashnetMockService } from '../flashnet/flashnet.mock'
@@ -233,7 +234,9 @@ export class SwapService {
         }
 
         if (!flashnetOrder) {
-          this.logger.warn(`[${orderId}] unknown order (${event})`)
+          this.logger.warn(
+            `[${sanitizeForLog(orderId, 64)}] unknown order (${sanitizeForLog(event, 64)})`,
+          )
           // Leave unprocessed: this can race quote persistence. The durable
           // reconciler will apply the snapshot once its quote is present.
           return
@@ -288,7 +291,9 @@ export class SwapService {
             : classifyTransition(currentStatus as any, attemptedStatus)
 
         if (decision.kind === 'noop') {
-          this.logger.log(`[${orderId}] ${flashnetOrder.status} (redelivery)`)
+          this.logger.log(
+            `[${sanitizeForLog(orderId, 64)}] ${flashnetOrder.status} (redelivery)`,
+          )
           await tx.flashnetWebhookEvent.update({
             where: { id: webhookEvent.id },
             data: { processedAt: new Date() },
@@ -298,7 +303,7 @@ export class SwapService {
 
         if (decision.kind === 'skip') {
           this.logger.warn(
-            `[${orderId}] ${flashnetOrder.status}->${attemptedStatus} ignored (stale)`,
+            `[${sanitizeForLog(orderId, 64)}] ${flashnetOrder.status}->${sanitizeForLog(attemptedStatus, 32)} ignored (stale)`,
           )
           await tx.flashnetWebhookEvent.update({
             where: { id: webhookEvent.id },
@@ -387,7 +392,7 @@ export class SwapService {
           finalSummary = `, received [${amountSats} sats], delivered [${amountUsdb} USDB]`
         }
         this.logger.log(
-          `[${orderId}] ${flashnetOrder.status}->${nextStatus} ${finalSummary ?? ''}`,
+          `[${sanitizeForLog(orderId, 64)}] ${flashnetOrder.status}->${nextStatus} ${finalSummary ?? ''}`,
         )
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

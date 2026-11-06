@@ -61,7 +61,9 @@ describe('QueryService', () => {
 
       mockPrismaService.lightningName.findFirst.mockResolvedValue(record)
 
-      const result = await service.findLightningNameByPubKey(record.linkingPubKeyHex)
+      const result = await service.findLightningNameByPubKey(
+        record.linkingPubKeyHex,
+      )
 
       expect(mockPrismaService.lightningName.findFirst).toHaveBeenCalledWith({
         where: {
@@ -75,7 +77,9 @@ describe('QueryService', () => {
     it('should return null when no record found', async () => {
       mockPrismaService.lightningName.findFirst.mockResolvedValue(null)
 
-      const result = await service.findLightningNameByPubKey('02'.padEnd(66, '1'))
+      const result = await service.findLightningNameByPubKey(
+        '02'.padEnd(66, '1'),
+      )
 
       expect(result).toBeNull()
     })
@@ -117,6 +121,42 @@ describe('QueryService', () => {
     })
   })
 
+  describe('logging of path parameters (issue 34)', () => {
+    function loggedStrings(): string[] {
+      const out: string[] = []
+      const walk = (v: unknown) => {
+        if (typeof v === 'string') out.push(v)
+        else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+      }
+      for (const m of ['log', 'error'] as const) {
+        ;(Logger.prototype[m] as unknown as jest.Mock).mock.calls.forEach(
+          (call: unknown[]) => call.forEach(walk),
+        )
+      }
+      return out
+    }
+
+    it('escapes and truncates an attacker-supplied pubKey', async () => {
+      mockPrismaService.lightningName.findFirst.mockResolvedValue(null)
+      await service.queryByPubKey('pk\n[Nest] LOG forged' + 'p'.repeat(5_000))
+
+      const text = loggedStrings().join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text.length).toBeLessThan(400)
+    })
+
+    it('escapes and truncates an attacker-supplied username', async () => {
+      mockPrismaService.lightningName.findMany.mockResolvedValue([])
+      await service
+        .queryByUsername('bob\r\n[Nest] LOG forged' + 'u'.repeat(5_000))
+        .catch(() => undefined)
+
+      const text = loggedStrings().join('|')
+      expect(text).not.toMatch(/[\r\n]/)
+      expect(text.length).toBeLessThan(400)
+    })
+  })
+
   describe('queryByPubKey', () => {
     it('should return response with encoded spark address', async () => {
       const record = {
@@ -143,7 +183,10 @@ describe('QueryService', () => {
         sparkAddress: 'sparkt1encoded',
         publicKey: record.linkingPubKeyHex,
       })
-      expect(encodeSparkAddress).toHaveBeenCalledWith(record.linkingPubKeyHex, 'TESTNET')
+      expect(encodeSparkAddress).toHaveBeenCalledWith(
+        record.linkingPubKeyHex,
+        'TESTNET',
+      )
     })
 
     it('should return null when lightning name not found', async () => {
